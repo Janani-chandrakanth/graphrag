@@ -1,12 +1,17 @@
 import requests
 
-url = "http://52.206.209.141:8002/api/tags"
+session = requests.Session()
+session.trust_env = False
 
-try:
-    response = requests.get(url, timeout=10)
+response = session.post(
+    "http://52.206.209.141:8002/api/generate",
+    json={
+        "model": "llama3.1:latest",
+        "prompt": "hello",
+        "stream": False
+    },
+    timeout=60
+)
 
-    print("Status:", response.status_code)
-    print(response.text[:500])
-
-except Exception as e:
-    print("ERROR:", e)
+print("STATUS:", response.status_code)
+print("BODY:", response.text[:1000])

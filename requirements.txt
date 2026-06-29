@@ -4,3 +4,6 @@ langchain-text-splitters
 pypdf
 ollama
 python-dotenv
+pydantic
+streamlit-agraph
+neo4j

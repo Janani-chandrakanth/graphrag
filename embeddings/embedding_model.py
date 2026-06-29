@@ -1,14 +1,16 @@
-from ollama import Client
+import requests
+from config import OLLAMA_EMBED_URL
 
-client = Client(
-    host="http://52.206.209.141:8002"
-)
 
 def generate_embedding(text):
-
-    response = client.embeddings(
-        model="nomic-embed-text:latest",
-        prompt=text
+    payload = {
+        "model": "nomic-embed-text:latest",
+        "prompt": text
+    }
+    response = requests.post(
+        OLLAMA_EMBED_URL,
+        json=payload,
+        proxies={"http": None, "https": None}
     )
-
-    return response["embedding"]
+    response.raise_for_status()
+    return response.json()["embedding"]
