@@ -1,4 +1,4 @@
-import json
+import re
 from pydantic import ValidationError
 
 from prompts.kg_extraction_prompt import KG_EXTRACTION_PROMPT
@@ -7,6 +7,32 @@ from graph.ontology_mapper import apply_ontology_mapping
 from parser.llm_client import call_ollama
 from config import EXTRACTION_MODEL, EXTRACTION_MODEL_URL
 from graph.sequence_extractor import extract_workflow_sequence
+
+METADATA_HEADER_KEYWORDS = {
+    "version", "revision", "document control", "change description", "author",
+    "reviewed by", "approved by", "document history", "version history", "page number"
+}
+
+def is_document_metadata_text(text: str) -> tuple[bool, str]:
+    """Detect if chunk text is Document Control/Version History table or repeating header/footer artifact."""
+    if not text:
+        return False, ""
+    text_lower = text.lower().strip()
+    
+    # Check 1: Document Control / Version History table headers
+    match_count = sum(1 for kw in METADATA_HEADER_KEYWORDS if kw in text_lower)
+    if match_count >= 2:
+        return True, "document_control_table"
+        
+    # Check 2: Header/footer page artifact patterns
+    if re.search(r'^(?:forvis\s+mazars\s+\d+|page\s+\d+(?:\s+of\s+\d+)?|document\s+control|version\s+history)$', text_lower):
+        return True, "page_header_footer"
+        
+    if re.search(r'(?:page\s+\d+\s+of\s+\d+|version\s+\d+\.\d+.*author|change\s+description.*version)', text_lower):
+        return True, "page_artifact"
+
+    return False, ""
+
 
 
 def extract_entities(requirement_text: str, prior_context: str = None,
@@ -215,15 +241,32 @@ def extract_entities(requirement_text: str, prior_context: str = None,
         raw_data, idx = decoder.raw_decode(output, start)
         json_str = output[start:idx]
 
+        # Check if current chunk text is document metadata
+        is_meta, meta_reason = is_document_metadata_text(requirement_text)
+
         # Validate NODES one by one
         valid_nodes   = []
         skipped_nodes = []
         for node in raw_data.get("nodes", []):
             try:
                 validated = Node(**node)
-                valid_nodes.append(validated.model_dump(exclude_none=True))
+                ndict = validated.model_dump(exclude_none=True)
+                nname_lower = (ndict.get("name") or "").lower().strip()
+                nid_lower = (ndict.get("id") or "").lower().strip()
+                
+                # Tag metadata nodes if chunk is metadata or node matches metadata patterns
+                if is_meta or nname_lower in ("parichita", "forvis mazars 5", "document control", "version history") or re.search(r'^(page\s+\d+|forvis\s+mazars|\d+\.\d+.*author)', nname_lower):
+                    if "author" in nname_lower or "parichita" in nname_lower:
+                        ndict["type"] = "Author"
+                    elif "page" in nname_lower or "mazars" in nname_lower:
+                        ndict["type"] = "PageArtifact"
+                    else:
+                        ndict["type"] = "DocumentMetadata"
+
+                valid_nodes.append(ndict)
             except ValidationError as e:
                 skipped_nodes.append({"input": node, "reason": str(e.errors())})
+
 
         # Validate RELATIONSHIPS one by one
         valid_relationships   = []

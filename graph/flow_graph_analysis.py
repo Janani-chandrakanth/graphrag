@@ -91,15 +91,18 @@ def _build_flow_adjacency(nodes: list, relationships: list) -> dict:
     steps in a business flow, so excluding them here is correct
     regardless of which specific relation type connects them.
     """
-    testcase_ids = {n["id"] for n in nodes if n.get("type") == "TestCase"}
-    adj = {n["id"]: [] for n in nodes}
+    METADATA_NODE_TYPES = {"testcase", "documentmetadata", "author", "pageartifact", "metadata", "versionhistory"}
+    excluded_ids = {n["id"] for n in nodes if str(n.get("type", "")).lower() in METADATA_NODE_TYPES}
+    adj = {n["id"]: [] for n in nodes if str(n.get("type", "")).lower() not in METADATA_NODE_TYPES}
+
     for r in relationships:
         if r.get("type") not in FLOW_RELATIONS:
             continue
-        if r["from"] in testcase_ids or r["to"] in testcase_ids:
+        if r["from"] in excluded_ids or r["to"] in excluded_ids:
             continue
         if r["from"] in adj and r["to"] in adj:
             adj[r["from"]].append(r["to"])
+
 
     seq_by_id = {}
     for n in nodes:

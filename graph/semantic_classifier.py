@@ -103,11 +103,17 @@ _TYPE_TO_ROLE: Dict[str, str] = {
     "Form":                 "ui_element",
     "Button":               "ui_element",
     "Component":            "ui_element",
-    # Artefacts (generated)
+    # Artefacts & Document Metadata
     "TestCase":             "artifact",
+    "DocumentMetadata":     "artifact",
+    "Author":               "artifact",
+    "PageArtifact":         "artifact",
+    "Metadata":             "artifact",
+    "VersionHistory":       "artifact",
     # Meta
     "Output":               "workflow_state",  # output of an action = a state
 }
+
 
 # ── Deterministic edge-type → role mapping ────────────────────────────
 # FLOW_RELATIONS = actual state/action transitions (from flow_graph_analysis.py)
@@ -456,15 +462,16 @@ def get_source_coverage_universe(
 # =============================================================================
 
 def _is_artifact(node_id: str, node_type: str) -> bool:
-    """True if a node is a generated test-case or other artefact."""
+    """True if a node is a generated test-case, document metadata, or other non-functional artifact."""
     nid = (node_id or "").lower()
     ntype = (node_type or "").lower()
-    if ntype in ("testcase", "artifact", "test_case"):
+    if ntype in ("testcase", "artifact", "test_case", "documentmetadata", "author", "pageartifact", "metadata", "versionhistory"):
         return True
     for prefix in _ARTIFACT_ID_PREFIXES:
         if nid.startswith(prefix.lower()):
             return True
     return False
+
 
 
 def _is_testable(role: str) -> bool:
