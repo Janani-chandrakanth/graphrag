@@ -69,12 +69,14 @@ def deduplicate_graph(nodes: list, relationships: list):
     # =========================================================
 
     unique_nodes = {}
+    node_occurrences = {}    # id -> how many chunk-level extractions mentioned it
     type_conflicts = []     # track conflicts for debugging
 
     for node in nodes:
 
         node["id"] = normalize_id(node["id"])
         node_id = node["id"]
+        node_occurrences[node_id] = node_occurrences.get(node_id, 0) + 1
 
         if node_id not in unique_nodes:
             # First time seeing this ID — store it
@@ -124,6 +126,7 @@ def deduplicate_graph(nodes: list, relationships: list):
     unique_relationships = []
     seen_exact = set()          # catches exact duplicates
     seen_canonical = set()      # catches reversed duplicates
+    rel_occurrences = {}         # exact_key -> how many chunk-level extractions produced it
 
     direction_conflicts = []    # track for debugging
 
@@ -136,6 +139,7 @@ def deduplicate_graph(nodes: list, relationships: list):
 
         # Key for exact duplicate check (same direction)
         exact_key = (rel["from"], rel["to"], rel_type)
+        rel_occurrences[exact_key] = rel_occurrences.get(exact_key, 0) + 1
 
         # Key for direction conflict check (either direction)
         # sorted() ensures (A, B) and (B, A) produce the same key
@@ -162,6 +166,19 @@ def deduplicate_graph(nodes: list, relationships: list):
         seen_exact.add(exact_key)
         seen_canonical.add(canonical_key)
         unique_relationships.append(rel)
+
+    # Stamp final occurrence counts onto the surviving objects — an
+    # additive field (leading underscore, internal-use marker) that
+    # doesn't change this function's return signature. Consumed by
+    # graph/confidence_scorer.py as its main deterministic signal:
+    # something independently extracted from more chunks is more
+    # likely to be a real, corroborated fact rather than a one-off
+    # LLM extraction quirk.
+    for node in unique_nodes.values():
+        node["_occurrence_count"] = node_occurrences[node["id"]]
+    for rel in unique_relationships:
+        key = (rel["from"], rel["to"], rel.get("type", ""))
+        rel["_occurrence_count"] = rel_occurrences.get(key, 1)
 
     return (
         list(unique_nodes.values()),

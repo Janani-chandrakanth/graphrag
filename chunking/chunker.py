@@ -22,7 +22,27 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 # ── Chunk size limits ──────────────────────────────────────
-MAX_CHUNK_SIZE  = 1000   # chars — LangChain splits anything larger
+# MAX_CHUNK_SIZE was 1000 chars. That's small enough that almost any
+# User Story with a real acceptance-criteria list (10-15 bullets is
+# routine — see the SharkNinja login example, ~1900 chars) blows past
+# it and gets cut into 2+ chunks by the LangChain splitter below,
+# purely on a character count that has nothing to do with where one
+# step ends and the next begins. Every extraction is one independent
+# LLM call (see graph/entity_extractor.py) with its own "sequence"
+# numbering that restarts at 1 — so a mid-story character split is
+# exactly what turns "step 8 leads to step 9" into two disconnected
+# little chains that never mention each other, which is the single
+# biggest cause of the hub-and-spoke / lost-sequence pattern for User
+# Stories specifically (see graph/entity_extractor.py's
+# continue_same_item parameter for the other half of this fix — what
+# happens on the rare split that's still unavoidable at this size).
+#
+# 3500 chars is comfortably inside the extraction model's num_ctx=8192
+# token budget (prompts/kg_extraction_prompt.py itself is large, but
+# even so this leaves several thousand tokens of headroom for input +
+# JSON output) and covers the large majority of real single-item
+# requirement/User-Story/Test-Case text without splitting at all.
+MAX_CHUNK_SIZE  = 3500   # chars — LangChain splits anything larger
 CHUNK_OVERLAP   = 100    # chars overlap between sub-chunks
 
 
@@ -204,6 +224,95 @@ def create_chunks(text: str) -> list:
     all_chunks = split_large_chunks(all_chunks)
 
     return all_chunks
+
+
+def create_chunks_from_items(items_with_links: list) -> list:
+    """
+    Structural Chunker, item-aware entry point.
+
+    Pipeline position: Rule-based Requirement Linker (items_with_links)
+    -> HERE -> Embedding Generator & LLM Entity/Relation Extractor.
+
+    Unlike create_chunks(text), which re-parses flat/markdown text with
+    regex from scratch, this consumes the already-structured item list
+    coming out of the linker — one chunk per item, by construction, with
+    no re-detection needed since Document Type Detector / Template
+    Normalizer / Normalization Validator already did that work upstream.
+    This is what lets id/family/linked_ids metadata survive into the
+    chunks instead of being thrown away and semantically re-discovered
+    later by the LLM extractor.
+
+    Each item becomes exactly one chunk unless its content exceeds
+    MAX_CHUNK_SIZE, in which case it's split into "<id>#1", "<id>#2", ...
+    sub-chunks via the same LangChain splitter create_chunks() uses —
+    every sub-chunk carries the same metadata (id/family/linked_ids),
+    since the link is a property of the requirement, not of which
+    character range a given sub-chunk happens to cover.
+
+    Args:
+        items_with_links: the "items_with_links" list from
+                           requirement_linker.link_requirements()
+                           (each item needs "id", "family", "content";
+                           "linked_ids" defaults to [] if absent so this
+                           also works directly on valid_items pre-linking)
+
+    Returns:
+        [
+            {
+                "chunk_id": str,       # item id, or "<id>#N" if split
+                "text": str,           # the chunk's actual content
+                "item_id": str,        # always the parent item's id,
+                                       # even for split sub-chunks
+                "family": str | None,
+                "linked_ids": [str, ...],
+                "is_split": bool,      # True if this is a sub-chunk
+            },
+            ...
+        ]
+    """
+    result = []
+
+    for item in items_with_links:
+        item_id = item.get("id")
+        family = item.get("family")
+        linked_ids = item.get("linked_ids", [])
+        content = (item.get("content") or "").strip()
+
+        if not content:
+            # An item with genuinely empty content produces an empty
+            # chunk, which produces an empty/degenerate embedding
+            # request, which is what crashes ChromaDB's upsert with
+            # "list index out of range" further down the pipeline —
+            # not a weak signal to flag, just nothing to chunk at all.
+            # Skip rather than emit a hollow chunk. In the normal case
+            # this should already be prevented upstream (Pass B now
+            # rejects empty descriptions before creating a GEN item),
+            # so hitting this is itself worth investigating if it
+            # happens often.
+            continue
+
+        if len(content) > MAX_CHUNK_SIZE:
+            sub_chunks = splitter.split_text(content)
+            for i, sub_text in enumerate(sub_chunks, start=1):
+                result.append({
+                    "chunk_id": f"{item_id}#{i}",
+                    "text": sub_text,
+                    "item_id": item_id,
+                    "family": family,
+                    "linked_ids": linked_ids,
+                    "is_split": True,
+                })
+        else:
+            result.append({
+                "chunk_id": item_id,
+                "text": content,
+                "item_id": item_id,
+                "family": family,
+                "linked_ids": linked_ids,
+                "is_split": False,
+            })
+
+    return result
 
 
 def get_document_info(text: str) -> dict:

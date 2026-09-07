@@ -15,12 +15,32 @@ chunks_collection = client.get_or_create_collection(
 )
 
 
-def store_chunk(chunk_id, chunk_text, embedding):
-    chunks_collection.upsert(
+def store_chunk(chunk_id, chunk_text, embedding, metadata=None):
+    """
+    Args:
+        metadata: optional dict, e.g. output of
+                  chunker.create_chunks_from_items(), such as
+                  {"item_id": "FR-001", "family": "FR",
+                   "linked_ids": ["TC-010", "BR-005"], "is_split": False}.
+                  Chroma metadata values must be str/int/float/bool (no
+                  lists), so list-valued fields like linked_ids are
+                  comma-joined here before storage. Omit entirely for
+                  the old call signature — unchanged, still works.
+    """
+    upsert_kwargs = dict(
         ids=[chunk_id],
         documents=[chunk_text],
-        embeddings=[embedding]
+        embeddings=[embedding],
     )
+    if metadata is not None:
+        flat_metadata = {
+            k: (",".join(v) if isinstance(v, list) else v)
+            for k, v in metadata.items()
+            if v is not None
+        }
+        upsert_kwargs["metadatas"] = [flat_metadata]
+
+    chunks_collection.upsert(**upsert_kwargs)
 
 
 def search_chunks(query_embedding, n_results=5):
@@ -194,3 +214,61 @@ def get_collection_stats():
             "name":  "community_summaries"
         }
     }
+
+
+# ── Collection 3: User Stories (User Story → Gherkin flow) ──
+# Separate collection so this flow's retrieval (graph/story_hybrid_retriever.py)
+# never accidentally mixes with the requirement-chunk-level RAG above —
+# same reasoning the summaries collection already keeps its own space.
+user_stories_collection = client.get_or_create_collection(
+    name="user_stories"
+)
+
+
+def store_user_story_embedding(story_id, summary_text, embedding, metadata=None):
+    """
+    Args:
+        story_id: same id as the UserStory node's storyId in Neo4j
+            (graph/story_graph_writer.upsert_user_story) — this is
+            what ties a Chroma vector back to its graph node.
+        summary_text: the "As a ... I want ... so that ..." summary —
+            what similarity search actually compares against.
+        metadata: e.g. {"doc_id": ..., "title": ...}. Chroma metadata
+            values must be str/int/float/bool (no lists) — list-valued
+            fields are comma-joined before storage, same convention as
+            store_chunk() above.
+    """
+    upsert_kwargs = dict(
+        ids=[story_id],
+        documents=[summary_text],
+        embeddings=[embedding],
+    )
+    if metadata is not None:
+        flat_metadata = {
+            k: (",".join(v) if isinstance(v, list) else v)
+            for k, v in metadata.items()
+            if v is not None
+        }
+        upsert_kwargs["metadatas"] = [flat_metadata]
+    user_stories_collection.upsert(**upsert_kwargs)
+
+
+def search_user_stories(query_embedding, n_results=5):
+    total = user_stories_collection.count()
+    if total == 0:
+        return {"ids": [[]], "documents": [[]], "distances": [[]], "metadatas": [[]]}
+    return user_stories_collection.query(
+        query_embeddings=[query_embedding],
+        n_results=min(n_results, total),
+    )
+
+
+def get_user_stories_collection_count():
+    return user_stories_collection.count()
+
+
+def delete_user_story_embedding(story_id):
+    try:
+        user_stories_collection.delete(ids=[story_id])
+    except Exception:
+        pass

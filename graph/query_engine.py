@@ -15,6 +15,7 @@ from vectorstore.chroma_manager import (
     get_summaries_collection_count,
     get_summaries_count_by_level
 )
+from graph.hybrid_retriever import retrieve_graph_facts, build_graph_facts_text
 
 
 QUERY_PROMPT = """
@@ -31,6 +32,43 @@ If the summaries do not contain enough information, say so clearly.
 ---
 RELEVANT COMMUNITY SUMMARIES:
 {summaries_text}
+---
+
+USER QUESTION:
+{user_question}
+
+---
+ANSWER:
+"""
+
+# Hybrid variant: adds a second, structured evidence section built from
+# a LIVE Cypher traversal of the matched communities (graph/hybrid_retriever.py)
+# rather than relying on the summary text alone. Kept as a separate
+# template (not a conditional insert into the one above) so the plain
+# summary-only path stays byte-for-byte unchanged when no graph facts
+# come back — never risk making an existing, working answer path worse
+# to add a new one.
+HYBRID_QUERY_PROMPT = """
+You are an expert requirements analyst assistant.
+
+A user has asked a question about a software requirements document.
+You have been given TWO kinds of evidence from its knowledge graph:
+
+1. Community summaries — human-readable overviews of related areas.
+2. Graph facts — exact (Node) -[RELATIONSHIP]-> (Node) edges pulled
+   live from the current graph for those same areas. These are the
+   ground truth for exact connections; the summaries are framing/
+   context. If they conflict, trust the graph facts.
+
+Use ONLY the evidence below. Do not invent or assume anything not
+present in it. If it isn't enough to answer, say so clearly.
+
+---
+RELEVANT COMMUNITY SUMMARIES:
+{summaries_text}
+---
+RELEVANT GRAPH FACTS (live traversal):
+{graph_facts_text}
 ---
 
 USER QUESTION:
@@ -108,11 +146,18 @@ def retrieve_relevant_summaries(
 
 def generate_final_answer(
     question: str,
-    retrieved_summaries: list
+    retrieved_summaries: list,
+    graph_facts_text: str = ""
 ) -> dict:
     """
-    Send retrieved summaries + question to llama3.1.
-    Returns synthesized answer.
+    Send retrieved summaries (+ optional live graph facts) + question
+    to llama3.1. Returns synthesized answer.
+
+    graph_facts_text: output of build_graph_facts_text(); when non-empty,
+    uses HYBRID_QUERY_PROMPT (summaries + live traversal). When empty
+    (no communities resolved to live nodes, or hybrid mode off), falls
+    back to the original QUERY_PROMPT unchanged — same answer this
+    function has always produced when there's nothing new to add.
     """
     if not retrieved_summaries:
         return {
@@ -123,10 +168,17 @@ def generate_final_answer(
 
     summaries_text = build_summaries_text(retrieved_summaries)
 
-    prompt = QUERY_PROMPT.format(
-        summaries_text=summaries_text,
-        user_question=question
-    )
+    if graph_facts_text:
+        prompt = HYBRID_QUERY_PROMPT.format(
+            summaries_text=summaries_text,
+            graph_facts_text=graph_facts_text,
+            user_question=question
+        )
+    else:
+        prompt = QUERY_PROMPT.format(
+            summaries_text=summaries_text,
+            user_question=question
+        )
 
     try:
         response = requests.post(
@@ -172,20 +224,31 @@ def generate_final_answer(
 def run_graphrag_query(
     question: str,
     level: str = None,
-    n_results: int = 3
+    n_results: int = 3,
+    use_graph_traversal: bool = True
 ) -> dict:
     """
-    Complete GraphRAG query pipeline.
+    Complete GraphRAG query pipeline — now genuinely hybrid:
+    1. Semantic search over community summaries (unchanged).
+    2. NEW: live Cypher traversal of the matched communities'
+       actual current nodes/relationships (graph/hybrid_retriever.py).
+    3. Both fed into one prompt (or step 1 alone if step 2 finds
+       nothing live to traverse — same-quality answer as before, never
+       worse).
 
     Args:
         question:  user question
         level:     "ROOT", "LOW", "HIGH", or None (search all)
         n_results: how many summaries to retrieve
+        use_graph_traversal: set False to reproduce the exact
+            pre-hybrid behavior (semantic-only) — useful for A/B
+            comparison or if Neo4j is unreachable but Chroma isn't.
 
     Returns:
         {
             "answer": str,
             "retrieved_summaries": list,
+            "graph_facts": {"nodes": [...], "relationships": [...], "communities_traversed": [...]},
             "communities_used": list,
             "level_used": str,
             "success": bool,
@@ -201,6 +264,7 @@ def run_graphrag_query(
     except Exception as e:
         return {
             "answer": "", "retrieved_summaries": [],
+            "graph_facts": {"nodes": [], "relationships": [], "communities_traversed": []},
             "communities_used": [], "success": False,
             "error": f"Retrieval failed: {str(e)}"
         }
@@ -208,15 +272,33 @@ def run_graphrag_query(
     if not retrieved:
         return {
             "answer": "No relevant summaries found. Generate community summaries first.",
-            "retrieved_summaries": [], "communities_used": [],
+            "retrieved_summaries": [],
+            "graph_facts": {"nodes": [], "relationships": [], "communities_traversed": []},
+            "communities_used": [],
             "success": False, "error": "Empty retrieval"
         }
 
-    result = generate_final_answer(question, retrieved)
+    graph_facts = {"nodes": [], "relationships": [], "communities_traversed": []}
+    graph_facts_text = ""
+    if use_graph_traversal:
+        try:
+            community_ids = [s["community_id"] for s in retrieved]
+            graph_facts = retrieve_graph_facts(community_ids)
+            graph_facts_text = build_graph_facts_text(graph_facts)
+        except Exception as e:
+            # Traversal failing (e.g. Neo4j asleep/unreachable) must NOT
+            # take down the whole query — degrade to summary-only, same
+            # as if use_graph_traversal=False, but note it happened
+            # rather than silently proceeding as if nothing changed.
+            graph_facts_text = ""
+            graph_facts["error"] = f"Graph traversal failed, fell back to summary-only: {str(e)}"
+
+    result = generate_final_answer(question, retrieved, graph_facts_text)
 
     return {
         "answer":              result.get("answer", ""),
         "retrieved_summaries": retrieved,
+        "graph_facts":         graph_facts,
         "communities_used":    result.get("communities_used", []),
         "level_used":          level or "ALL",
         "success":             result.get("success", False),

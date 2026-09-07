@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Literal
+from typing import List, Literal, Optional, Dict
 
 
 # =========================================================
@@ -32,7 +32,28 @@ ALLOWED_RELATIONS = Literal[
     "PROCESSES",
     "STORES",
     "RETRIEVES",
-    "EXECUTES"
+    "EXECUTES",
+    # Deterministic types from graph/structural_linker.py — see
+    # graph/validator.py's ALLOWED_RELATIONS for the matching note.
+    "VERIFIED_BY",
+    "VERIFIES",
+    "REALIZES",
+    "REALIZED_BY",
+    "RELATED_TO",
+    "RELATES_TO",
+    # ── Added to cover richer BR/NFR/Risk/Glossary documents —
+    # keep in sync with graph/validator.py's ALLOWED_RELATIONS ──
+    "ACTOR_OF",
+    "PRODUCES",
+    "VIEWS",
+    "PERFORMS",
+    "REFERENCES",
+    "SUPPORTS",
+    "CONSTRAINS",
+    "THREATENS",
+    "DEFINES",
+    "NEXT_IN_DOCUMENT",
+    "NAVIGATES_TO",
 ]
 
 
@@ -56,6 +77,27 @@ class Node(BaseModel):
     name: str = Field(
         ...,
         description="Human readable name"
+    )
+
+
+    description: Optional[str] = Field(
+        default=None,
+        description="Short description of the entity"
+    )
+
+    source: Optional[str] = Field(
+        default=None,
+        description="Requirement ID where this entity originated"
+    )
+
+    attributes: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional entity attributes"
+    )
+
+    aliases: List[str] = Field(
+        default_factory=list,
+        description="Alternative names for the entity"
     )
 
     # -------------------------------------------------------
@@ -96,11 +138,27 @@ class Relationship(BaseModel):
         description="Target node id"
     )
 
-    type: ALLOWED_RELATIONS = Field(
+    type: str = Field(
         ...,
-        description="Relationship type — must be from allowed list"
+        description="Relationship type — auto-normalized to UPPER_SNAKE_CASE"
     )
-    # If LLM returns "RELATES_TO" or "MAYBE_USES" → Pydantic rejects it immediately
+
+    description: Optional[str] = Field(
+        default=None,
+        description="Description of why these nodes are connected"
+    )
+
+    source: Optional[str] = Field(
+        default=None,
+        description="Requirement ID where this relationship originated"
+    )
+
+    @field_validator("type")
+    @classmethod
+    def normalize_rel_type(cls, value: str) -> str:
+        if not value or not str(value).strip():
+            return "RELATED_TO"
+        return str(value).strip().upper().replace(" ", "_").replace("-", "_")
 
     # Normalize from_node and to ids
     @field_validator("from_node", "to")

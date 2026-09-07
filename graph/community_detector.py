@@ -5,7 +5,11 @@ All Neo4j calls go through neo4j_manager for reconnection support.
 """
 
 import networkx as nx
-import community as community_louvain
+try:
+    import community as community_louvain
+except ImportError:
+    community_louvain = None
+
 from graph.neo4j_manager import (
     get_all_nodes,
     get_all_relationships,
@@ -42,11 +46,24 @@ def detect_communities(G: nx.DiGraph) -> dict:
         {node_id: community_id, ...}
     """
     G_undirected = G.to_undirected()
-    partition = community_louvain.best_partition(
-        G_undirected,
-        resolution=1.0,
-        random_state=42
-    )
+    if community_louvain is not None:
+        partition = community_louvain.best_partition(
+            G_undirected,
+            resolution=1.0,
+            random_state=42
+        )
+        return partition
+    
+    # Fallback to networkx community algorithms if python-louvain is not installed
+    try:
+        communities = nx.community.louvain_communities(G_undirected, seed=42)
+    except Exception:
+        communities = nx.community.greedy_modularity_communities(G_undirected)
+
+    partition = {}
+    for comm_id, node_set in enumerate(communities):
+        for node in node_set:
+            partition[node] = comm_id
     return partition
 
 

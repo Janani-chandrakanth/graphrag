@@ -1,0 +1,16 @@
+streamlit
+chromadb
+langchain-text-splitters
+pypdf
+python-docx
+python-dotenv
+neo4j
+networkx
+python-louvain
+pydantic
+streamlit-agraph
+requests
+fastapi
+uvicorn
+python-multipart
+pandas

@@ -2,8 +2,34 @@ streamlit
 chromadb
 langchain-text-splitters
 pypdf
+python-docx
+
+# ─── PDF parsing (parser/pdf_extractor.py) ──────────────────────────
+# Docling: layout-aware structure extraction (headings, real table
+# structure via TableFormer, picture regions) -- replaces the old
+# pdfplumber font-size-heuristic reconstruction.
+# RapidOCR: reads text OUT OF the picture regions Docling finds
+# (diagrams, screenshots) -- Docling's own layout model finds figures
+# but doesn't OCR their contents by itself.
+# pypdf is kept as the plain-text fallback if these aren't installed
+# (see parser/pdf_extractor.py's _extract_with_pypdf_fallback).
+docling
+rapidocr-onnxruntime
 ollama
 python-dotenv
 pydantic
 streamlit-agraph
 neo4j
+openpyxl
+
+# ─── LangChain + Neo4j + Ollama natural-language graph querying ────
+# graph/langchain_qa.py — replaces the old query_engine.py-based
+# Search & Query section (chunk vector search + community-summary
+# hybrid retrieval) with LangChain's GraphCypherQAChain: an LLM
+# (ChatOllama, this project's existing Ollama server) translates the
+# question straight into Cypher against the live graph, executes it
+# via langchain-neo4j's Neo4jGraph, then answers from the real result.
+langchain
+langchain-core
+langchain-neo4j
+langchain-ollama
