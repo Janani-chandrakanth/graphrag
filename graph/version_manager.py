@@ -1,19 +1,7 @@
 """
-Version Manager
+graph/version_manager.py
 
-Neo4j's MERGE ... SET (graph/neo4j_manager.py) writes new/changed
-properties onto existing nodes IN PLACE -- great for "the graph
-evolves instead of restarting," bad for "the original graph should
-never be lost" on its own, since a later update can overwrite an
-earlier value with nothing left to compare against.
-
-This module closes that gap the simple way: before every incremental
-update is applied (see graph/incremental_merge.py + app.py's Update
-Graph tab), the CURRENT full graph state is captured into a
-:GraphVersion node as a JSON snapshot. "Version N" always means
-"exactly what the graph looked like right before update N+1 was
-applied"; the live graph in Neo4j itself is always the latest,
-current version -- see get_current_graph_as_version().
+Manages versioning and snapshots for knowledge graphs, persisting pre-update graph states in Neo4j.
 """
 
 import json

@@ -1,42 +1,8 @@
 """
-Incremental Graph Merge
+graph/incremental_merge.py
 
-The one new stage the "Update Graph" pipeline adds on top of the exact
-same Parser -> Chunking -> Embeddings -> Entity Extraction -> Validation
--> Deduplication pipeline the main "Build Graph" pipeline already uses
-(see app.py's Update Graph tab). Everything upstream of this module is
-100% reused, unchanged.
-
-Four responsibilities, run in order:
-
-  1. Entity Matching     -- match_entities()
-     Decide whether a newly-extracted node is actually an EXISTING
-     node under the graph's own MERGE-by-id semantics, and only
-     genuinely un-matchable, un-remapped nodes look like the graph is
-     restarting from empty.
-
-  2. Conflict Detection   -- detect_conflicts()
-     "Payment used to lead to Receipt, the new upload says Payment
-     leads to Invoice" -- flag it as a modification instead of
-     blindly appending a second, silently-contradictory edge.
-
-  3. Relationship Validation -- validate_relationships_no_cycles()
-     Cycles, isolated nodes, invalid direction (dangling endpoints),
-     duplicate edges, run against the FULL merged graph (existing +
-     new), not just the new upload in isolation.
-
-  4. Workflow Preservation -- preserve_workflow()
-     Applies the user's resolution for each conflict (extend/replace/
-     skip) and defaults every non-conflicting edge to "extend" (append
-     -- never silently deletes an existing edge without an explicit
-     "replace" decision), so the existing sequential flow can only be
-     extended or deliberately modified, never accidentally broken.
-
-build_merge_plan() runs all four and returns a plan for the UI to
-review; apply_merge_plan() does the actual Neo4j write, only once the
-user has confirmed it (and only after graph/version_manager.py has
-snapshotted the pre-merge state, so nothing is ever lost -- see
-app.py's Update Graph tab for the exact sequencing).
+Coordinates incremental graph merging: entity matching, structural conflict detection,
+graph validation, and user-directed workflow preservation.
 """
 
 import math

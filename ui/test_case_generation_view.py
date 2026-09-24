@@ -22,12 +22,9 @@ def render_test_case_generation_section():
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        engine_mode = st.radio(
-            "Generation Strategy",
-            ["Hybrid (LLM + Vector + Graph)", "Graph-Only Deterministic", "BDD / Gherkin Feature Suite"],
-            horizontal=True,
-            key="tc_gen_strategy_mode",
-        )
+        st.markdown("**Generation Strategy**")
+        st.markdown("Hybrid (LLM + Vector + Graph)")
+        engine_mode = "Hybrid (LLM + Vector + Graph)"
     with col2:
         st.write("")
         st.write("")
@@ -73,8 +70,7 @@ def render_test_case_generation_section():
                 elif engine_mode == "Graph-Only Deterministic":
                     tc_results = generate_test_cases_from_graph(all_graph_nodes, rels, items_with_links, links)
                 else: # BDD Gherkin
-                    feature_suite = generate_bdd_test_suite(all_graph_nodes, rels)
-                    tc_results = {"gherkin_suite": feature_suite, "test_cases": []}
+                    tc_results = generate_bdd_test_suite(all_graph_nodes, rels)
 
                 st.session_state["generated_test_cases_result"] = tc_results
                 # Also store under the key the evaluation tab expects

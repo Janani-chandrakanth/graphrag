@@ -8,7 +8,7 @@ load_dotenv()
 # ───────────────────────────────────────────────────────────────
 
 # Main Ollama server
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://52.206.209.141:8002")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://10.10.160.51:11434")
 OLLAMA_HOST = OLLAMA_URL
 
 # Embedding model
@@ -70,6 +70,12 @@ WORKFLOW_MODEL_URL = os.getenv(
 NEO4J_URI = os.getenv("NEO4J_URI")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+# Validate that required Neo4j connection settings are provided
+if not NEO4J_URI or not NEO4J_USERNAME or not NEO4J_PASSWORD:
+    raise RuntimeError(
+        "Neo4j connection settings are missing. Please set NEO4J_URI, NEO4J_USERNAME, and NEO4J_PASSWORD in your .env file or environment variables."
+    )
 # Optional. The raw neo4j driver (graph/neo4j_manager.py's d.session()
 # with no args) asks the server for its default database via routing
 # and just works. langchain-neo4j's Neo4jGraph does NOT do that -- it

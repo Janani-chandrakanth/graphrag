@@ -1,26 +1,8 @@
 """
-graph/story_hybrid_retriever.py — Hybrid Search & Cypher Retrieval for
-the User Story -> Gherkin flow.
+graph/story_hybrid_retriever.py
 
-Ported from graphrag2/retrieval/hybrid_retriever.py's two-step design,
-adapted to this flow's scoping decisions (ChromaDB instead of a
-Neo4j-native vector index; Ollama-only embeddings):
-
-  1. Vector search over past UserStory summaries — but via
-     vectorstore/chroma_manager.py's `user_stories` collection
-     (embeddings/embedding_model.generate_embedding + Chroma) instead
-     of graphrag2's `db.index.vector.queryNodes` Neo4j vector index.
-  2. Cypher graph traversal from those matched stories, pulling
-     upstream Requirements, downstream Features/FlowSteps, and any
-     linked AcceptanceCriteria into one assembled context object —
-     same traversal shape graphrag2 used, run here through
-     graph/neo4j_manager.run_read_query.
-
-Cold-start fallback: if the Chroma collection has no stories yet, or
-nothing scores above the similarity floor, falls back to direct
-Feature name matching against keywords extracted from the new use
-case — so day-one usage with zero history still returns something,
-same as graphrag2.
+Retrieves User Story and Gherkin flow context using vector similarity search
+combined with Cypher graph traversals for upstream/downstream entity retrieval.
 """
 
 from embeddings.embedding_model import generate_embedding

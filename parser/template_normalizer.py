@@ -1,41 +1,11 @@
 """
-Template Normalizer
+parser/template_normalizer.py
 
-Takes a DocumentStructure + a detected doc_type and produces a normalized
-document: a flat list of items (each with an ID, a type, and content),
-matching the canonical template for that doc_type.
-
-Two passes, per the hybrid regex/LLM decision for this pipeline:
-
-  Pass A (regex, cheap, deterministic):
-    Walk every block in document order. A paragraph/list_item/table-row
-    that starts with a recognizable ID token (FR-001, TC-014, ...) becomes
-    an item immediately — no LLM call needed for the common case where
-    documents are already reasonably well-formed.
-
-  Pass B (LLM, only for the gap):
-    Whatever Pass A couldn't anchor — un-ID'd paragraphs and list items —
-    gets batched into a single structured-output LLM call to recover
-    items that exist in prose form without explicit IDs (e.g. a BRD
-    written as flowing paragraphs instead of "BR-001: ..." bullets).
-    Capped in size (see _PASS_B_MAX_CANDIDATES / _PASS_B_MAX_CHARS) so a
-    huge free-form document doesn't turn into one giant, slow, unreliable
-    LLM call — anything past the cap is left in unmatched_blocks with a
-    warning, rather than silently dropped.
-
-Known limitation (documented, not fully fixed here): a table row like
-"FR-003 | ... | ..." is only recognized as an ID-anchored item in Pass A
-when the ID sits in the FIRST cell of the row (same start-of-string check
-used everywhere else). A table with the ID in a non-first column, or a
-numeric-only ID with no family prefix, will NOT be caught by Pass A — but
-as of the "extract everything" pass, such rows ARE still sent to Pass B
-as flattened "table_row" candidates (e.g. an Acronyms table's "BR |
-Booking.com" row), just without the row's original column structure. So
-nothing from a table is silently dropped anymore; a misplaced ID just
-means the row is classified/extracted like ordinary prose instead of
-being anchored as a proper {id, family} item.
+Normalizes document structures into a flat list of items (ID, type, content)
+using hybrid regex anchoring (Pass A) and LLM-based gap recovery (Pass B).
 """
 
+import json
 from parser.structure_preserver import DocumentStructure, Block
 from parser.item_patterns import match_item_id
 from parser.templates import get_template

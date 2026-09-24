@@ -1,32 +1,8 @@
 """
-graph/langchain_qa.py — REPLACES graph/query_engine.py as the engine
-behind app.py's "Search and Query" section.
+graph/langchain_qa.py
 
-Why: the old query phase (query_engine.run_graphrag_query) answered by
-retrieving Chroma-stored COMMUNITY SUMMARY TEXT (pre-written prose
-about a community, generated back in Phase 2/3) and optionally
-supplementing it with a live graph pull. That's fundamentally
-retrieval-over-summaries — the LLM never actually queries the graph
-itself, it just reads a paragraph someone (an earlier LLM pass) wrote
-about part of it.
-
-This module replaces that with the pattern from the referenced
-walkthrough: LangChain's GraphCypherQAChain. Given a natural-language
-question, an LLM (ChatOllama — this project's existing Ollama server,
-no new provider) writes the actual Cypher query, langchain-neo4j's
-Neo4jGraph executes it against the live database, and a second LLM
-pass turns the raw Cypher result rows into a natural-language answer.
-The graph itself is the source of truth on every call — there's no
-pre-written summary text sitting between the question and the graph
-that can go stale.
-
-allow_dangerous_requests=True is required by GraphCypherQAChain since
-langchain 0.2 (it executes LLM-generated Cypher against a real
-database). This project's Neo4j instance only ever holds data this
-same pipeline wrote (graph_builder.py / neo4j_manager.py), and the
-question box is a single-user local tool, not a public endpoint — the
-same trust boundary the existing raw "Cypher Query" mode in app.py
-already assumes (it lets you type and run ANY Cypher directly).
+Natural language graph QA using LangChain's GraphCypherQAChain to translate
+questions into Cypher queries, execute them on Neo4j, and synthesize answers.
 """
 
 from langchain_neo4j import Neo4jGraph, GraphCypherQAChain

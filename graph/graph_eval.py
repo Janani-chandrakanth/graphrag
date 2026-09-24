@@ -1,41 +1,8 @@
 """
-graph/graph_eval.py — automated correctness checks for the built
-knowledge graph, so a big document's graph can be sanity-checked
-without eyeballing a visualization screenshot.
+graph/graph_eval.py
 
-Two parts, deliberately separated because they have very different
-requirements:
-
-  PART A — evaluate_structure(): structural health. No ground truth
-  needed — runs on any document, today, right after the Graph
-  Validator. Answers "is this graph well-formed" (connected, not
-  hub-dominated, nothing missing), not "is this graph correct."
-
-  PART B — evaluate_sequence(): sequence/traceability correctness
-  against a human-authored ground truth file. This is scaffolding —
-  it needs you to mark up 1-2 representative documents with the
-  sequence you know is actually correct before it can tell you
-  anything. See load_ground_truth()'s docstring for the file format.
-  Not wired into the UI yet; call it directly once you have a
-  ground-truth file to test against.
-
-Design note (post backbone removal): graph/structural_linker.py no
-longer creates a requirement-ID backbone node per item, or a PART_OF
-edge from every entity back to one (see its module docstring for why).
-That means the checks below that used to lean on backbone nodes had to
-change what they measure:
-  - Isolated nodes are no longer treated as an automatic FAIL (a real
-    entity genuinely unrelated to anything else within its own chunk
-    can legitimately end up isolated now) — it's a WARN worth a look,
-    not proof of a wiring bug.
-  - "missing backbone nodes" no longer applies — there's no backbone
-    to be missing from.
-  - "requirements with no extracted content" is now computed from
-    node["source"] (set by tag_extraction_source()) instead of PART_OF
-    edges — same signal, different mechanism.
-  - evaluate_sequence() (Part B) still converts ground-truth item IDs
-    with _local_backbone_id() purely as a canonicalization key for
-    comparing pairs — no actual graph node is implied by it.
+Evaluates graph health and structural correctness, checking connectivity,
+node distributions, hub dominance, and optional ground-truth sequence fidelity.
 """
 
 import json

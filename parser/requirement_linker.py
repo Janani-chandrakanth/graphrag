@@ -1,36 +1,8 @@
 """
-Rule-based Requirement Linker
+parser/requirement_linker.py
 
-Pipeline position: Normalization Validator (valid_items) -> HERE -> Structural
-Chunker. Operates only on items that already passed validation — the
-review_queue is a human's problem, not this stage's.
-
-What it does: scans each valid item's content for exact-ID mentions of
-OTHER items in the same document (e.g. an FR-001 item's text saying
-"see TC-010 and TC-011") and turns those mentions into explicit links,
-using known references instead of waiting for the LLM entity/relation
-extractor to (re)discover the same connection semantically. This gives
-the graph a set of high-confidence edges before any AI processing runs.
-
-Deliberately narrow scope, matching the architecture note in the handoff
-doc ("explicit references... known relationships before AI processing"):
-  - Exact-ID matching only. No fuzzy/semantic linking here — that's the
-    LLM Entity & Relation Extractor's job, several steps downstream.
-  - Single-document scope. Links are resolved against the *other items
-    in the same valid_items list* passed in. A mention of an ID that
-    lives in a different uploaded document won't resolve here — that
-    kind of cross-document linking belongs at the graph level (after
-    Neo4j write, where MERGE can match on ID regardless of source doc),
-    not in this per-document pipeline stage.
-  - Mentions of unknown IDs (referenced but not present in this
-    document's valid_items) are preserved as `broken_references`
-    rather than silently ignored — useful signal for the Graph
-    Validator's "missing requirement links" check later, and worth
-    surfacing sooner rather than later.
-
-Relation-type mapping (RELATION_RULES below) is a starting heuristic,
-not a domain-authoritative taxonomy — it's intentionally small and
-easy to extend/override per-project as real usage surfaces gaps.
+Links validated document items by scanning content for exact requirement ID references
+and mapping family pairs to relationship types.
 """
 
 import re

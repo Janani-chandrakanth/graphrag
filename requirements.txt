@@ -33,3 +33,9 @@ langchain
 langchain-core
 langchain-neo4j
 langchain-ollama
+
+# ─── Data manipulation & Graph algorithms ────────────────────────────
+pandas
+networkx
+python-louvain
+requests

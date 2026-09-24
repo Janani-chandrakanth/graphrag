@@ -1,41 +1,8 @@
 """
-Normalization Validator
+parser/normalization_validator.py
 
-Takes normalize_document()'s output and checks each item against a small
-set of deterministic rules. Per the decision made for this pipeline stage:
-stays fully rule-based (checking IDs/required fields against a schema is
-deterministic — no reason to burn an LLM call here).
-
-Deliberately different from graph/validator.py's behavior: that validator
-silently drops nodes/relationships that fail its checks and only reports
-a "removed" count — the failed items themselves never go anywhere a human
-could act on them. This validator never drops anything. Every item ends
-up in exactly one of two buckets:
-
-  - valid_items:   passed every rule, safe to hand to the next pipeline
-                    stage (Rule-based Requirement Linker / Structural
-                    Chunker) without a human in the loop.
-  - review_queue:  failed one or more rules, held here with the specific
-                    reason(s) attached — a human resolves these (approve
-                    as-is, edit, or reject) before they proceed.
-
-Rules applied (all deterministic, no LLM):
-  1. LLM-gap-filled items always need review — they weren't grounded in
-     an explicit ID in the source document, so a human should confirm
-     the extraction before it's trusted downstream.
-  2. Duplicate IDs — same ID used by more than one item in the document.
-     All instances are flagged, not just the second one, since we can't
-     tell which (if either) is the "real" one without a human deciding.
-  3. Foreign family — item's ID family isn't native to the detected doc
-     type's template (e.g. a TC- item inside a document classified SRS).
-     Not necessarily wrong (cross-references happen), but worth a look.
-  4. Content too short — below a minimum length to plausibly be a real
-     requirement/item rather than a stray fragment.
-  5. Malformed ID — doesn't match any known family pattern and isn't an
-     LLM-generated placeholder (GEN-xxx). Shouldn't happen given how
-     template_normalizer.py constructs items, but this validator is
-     meant to be usable on any normalized_document-shaped input, not
-     just ones that came straight out of that one function.
+Validates normalized document items against deterministic schema rules,
+categorizing items into valid_items and review_queue buckets.
 """
 
 from collections import Counter

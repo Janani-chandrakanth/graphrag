@@ -1,27 +1,8 @@
 """
-graph/story_graph_writer.py — writes the User Story -> Gherkin flow's
-entities into Neo4j, following the same ontology graphrag2 established:
+graph/story_graph_writer.py
 
-    RequirementDoc -[:DERIVED_FROM]-> Requirement -[:REFINES]-> UserStory
-    UserStory -[:ASSOCIATED_WITH]-> Persona
-    UserStory -[:VALIDATES]-> AcceptanceCriteria
-    UserStory -[:REQUIRES]-> Feature -[:HAS_FLOW]-> FlowStep
-    TestCase -[:TESTS]-> Feature
-    TestCase -[:VALIDATES]-> AcceptanceCriteria
-    TestCase -[:COMPOSED_OF]-> TestStep
-
-Coexists in the SAME Neo4j database as the main pipeline's generic
-:Entity graph (graph/neo4j_manager.py's insert_graph) without
-colliding — these nodes use their own labels (:UserStory, :Requirement,
-...) and their own id properties (storyId, reqId, ...), never :Entity.
-
-Per this flow's scoping decision, vector search stays on ChromaDB
-(vectorstore/chroma_manager.py's user_stories collection) rather than
-a Neo4j-native vector index — so, unlike graphrag2's graph_writer.py,
-nothing here computes or stores an `embedding` property on any node.
-Embedding a UserStory's summary and storing it in Chroma is a separate
-step the call site (app.py) does right after upsert_user_story(),
-keyed by the same story_id.
+Writes User Story and Gherkin flow entities (UserStory, Persona, Feature, AcceptanceCriteria, TestCase)
+into Neo4j with structured domain labels.
 """
 
 from graph.neo4j_manager import run_write_query

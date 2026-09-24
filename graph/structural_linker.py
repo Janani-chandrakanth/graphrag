@@ -1,40 +1,8 @@
 """
-Structural Linker — tags LLM-extracted entities/relationships with the
-requirement item they came from.
+graph/structural_linker.py
 
-Design history (why there's no backbone node builder here anymore):
-    An earlier version of this module built a full "requirement
-    backbone" — one graph node per valid item (e.g.
-    "requirement_br_stay_6"), NEXT_IN_DOCUMENT sequence edges between
-    consecutive items, and PART_OF edges from every LLM-extracted node
-    back to its backbone node. That made the graph 100% connected with
-    zero isolated nodes, but at a real cost: PART_OF fired
-    unconditionally on every node (not just ones the LLM genuinely
-    couldn't relate to anything), so it became the plurality of all
-    edges in the graph — clutter that buried the LLM's own functional
-    relationships (TRIGGERS, LEADS_TO, USES, CAUSES...) exactly where
-    they mattered most, i.e. seeing how functionality actually flows.
-
-    Requirement-ID nodes also add nothing to test case generation —
-    test_case_generator.py works from parser/requirement_linker.py's
-    items_with_links / links directly, never touches Neo4j or these
-    backbone nodes at all.
-
-    So: no backbone nodes, no PART_OF, no NEXT_IN_DOCUMENT. Traceability
-    back to the source requirement is kept via node["source"] / 
-    rel["source"] (set below) instead of a graph edge — every extracted
-    node/relationship still knows which item it came from, it's just a
-    property, not a connection you have to route the graph through.
-    Functional sequence between entities is now visible directly via
-    whatever real edges the LLM extracted (TRIGGERS, LEADS_TO, USES,
-    CAUSES, SHOWS, ...) with nothing competing for attention.
-
-    Accepted tradeoff: an entity the LLM genuinely couldn't relate to
-    anything else within its own chunk can now end up as a real
-    isolated node in the graph, instead of being artificially connected
-    via PART_OF. graph/graph_eval.py's structural checks were updated
-    to treat that as an expected, worth-a-look signal rather than a
-    wiring bug — see its module docstring.
+Tags LLM-extracted nodes and relationships with their originating requirement item IDs
+for source traceability across the knowledge graph.
 """
 
 

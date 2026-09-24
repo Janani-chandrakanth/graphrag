@@ -1,42 +1,8 @@
 """
-Universal canonical-template preprocessing.
+parser/canonicalizer.py
 
-New step, runs after parse_document() and before document_type_detector:
-
-    DocumentStructure.to_markdown() -> canonicalize_document() -> canonical markdown
-
-Nothing downstream is replaced. document_type_detector, template_normalizer,
-normalization_validator, requirement_linker, chunking, entity_extractor,
-and structural_linker all stay exactly as they are — this just gives them
-the option of cleaner, more consistently-shaped input than whatever the
-source document happened to look like. It's a toggle in app.py, not a
-silent behavior change: callers choose whether to run the normal pipeline
-against structure.to_markdown() (as before) or against
-result["canonical_markdown"] from this module.
-
-Why this exists: most of the bugs fixed in earlier sessions existed
-*because* source documents format requirement IDs inconsistently — heading
-vs. paragraph vs. table, one ID family covering several unrelated feature
-flows, body text orphaned from its title, etc. A canonical shape removes
-whole classes of that by construction instead of patching around each
-inconsistency as it's discovered.
-
-Design constraints this module is built around (see handoff doc):
-  - Batch section-by-section for long documents (map), never one giant
-    call — same discipline parser/template_normalizer.py's Pass B already
-    uses for the same reason (cost, reliability, and Ollama's context
-    window being finite regardless of what the model itself supports).
-  - "Don't lose any info" is an enforced, checked property of this step,
-    not an assumption. See _completeness_check() — every ID token
-    (FR-001, BR_STAY_6, ...) found in the original text is verified to
-    still appear somewhere in the canonical output; anything missing is
-    reported, never silently swallowed.
-  - The canonicalizer MUST preserve original ID tokens verbatim in its
-    output. This is not just for the completeness check — the existing
-    Pass A regex matcher in template_normalizer.py depends on being able
-    to find "FR-001:" style tokens in the canonical text. A canonicalizer
-    that reworded or dropped IDs would make the existing (already fixed)
-    pipeline worse, not better.
+Preprocesses parsed document structures into a clean, canonical markdown format
+while preserving requirement IDs, section hierarchy, and content completeness.
 """
 
 import io

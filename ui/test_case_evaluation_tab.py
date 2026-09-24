@@ -168,55 +168,7 @@ def render_test_case_evaluation_tab():
 
     st.divider()
 
-    # 4. Overall Coverage Scorecard
-    st.subheader("Coverage & Correctness Metrics")
-    overall_cov = report.get("overall_coverage", 0.0)
-    st.subheader(f"Overall Test Coverage: {overall_cov}%")
 
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("Core Workflow Coverage", f"{summary.get('core_workflow_coverage_pct', summary.get('workflow_coverage', 0.0))}%")
-    with m2:
-        st.metric("Requirement Coverage", f"{summary.get('requirement_coverage_pct', 0.0)}%")
-    with m3:
-        st.metric("Business Rule Coverage", f"{summary.get('business_rule_coverage_pct', 0.0)}%")
-    with m4:
-        st.metric("Input Coverage", f"{summary.get('input_coverage_pct', 0.0)}%")
-
-    st.caption("Legacy & Correctness Metrics")
-    m5, m6, m7, m8 = st.columns(4)
-    with m5:
-        st.metric("Source Graph Context (Nodes)", f"{summary.get('node_coverage', 0.0)}%")
-    with m6:
-        st.metric("Workflow Transition (Edges)", f"{summary.get('edge_coverage', 0.0)}%")
-    with m7:
-        st.metric("Flow Correctness", f"{summary.get('flow_correctness', 0.0)}%")
-    with m8:
-        st.metric("Test Correctness", f"{summary.get('test_case_correctness', 0.0)}%")
-
-    st.divider()
-
-    # 5. Scenario Coverage Breakdown
-    st.subheader("Scenario Coverage")
-    scenarios = report.get("scenario_coverage", {})
-    
-    warnings = scenarios.get("warnings", [])
-    for w in warnings:
-        st.warning(w)
-
-    s1, s2, s3, s4, s5 = st.columns(5)
-    with s1:
-        st.metric("Positive Scenarios", f"{scenarios.get('positive', 0.0)}%")
-    with s2:
-        st.metric("Negative Scenarios", f"{scenarios.get('negative', 0.0)}%")
-    with s3:
-        st.metric("Edge Cases", f"{scenarios.get('edge_cases', 0.0)}%")
-    with s4:
-        st.metric("Alternate Paths", f"{scenarios.get('alternate_paths', 0.0)}%")
-    with s5:
-        st.metric("Failure / Retry", f"{scenarios.get('failure_retry', 0.0)}%")
-
-    st.divider()
 
     # 6. Unique Test Scenarios & Traceability
     st.subheader("Unique Test Scenarios & Traceability")

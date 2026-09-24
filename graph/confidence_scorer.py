@@ -1,52 +1,8 @@
 """
-Confidence Scorer
+graph/confidence_scorer.py
 
-Pipeline position: Entity Resolution (deduplicate_graph) -> HERE ->
-Graph Validator. Scores each deduplicated node and relationship for how
-much to trust it, so low-confidence ones can be flagged for manual
-review downstream — same never-silently-drop principle as the rest of
-this pipeline (parser/normalization_validator.py,
-parser/requirement_linker.py, graph/validator.py): nothing is removed
-here, everything is annotated and, if it scores low, also surfaced in
-low_confidence_nodes / low_confidence_relationships for visibility.
-
-Design decision (was an open question in the handoff doc): deterministic
-heuristic scoring, not LLM self-reported confidence. Matches this
-project's established hybrid rule — regex/rule-based wherever a
-signal is available without an extra LLM call. Asking the same LLM
-call that produced an extraction to also grade its own confidence is
-weaker signal anyway (a hallucinated entity is just as likely to be
-reported "confident" as a real one); independent corroboration across
-chunks is a stronger and free-to-compute signal, since it's already
-sitting in the dedup step's occurrence counts.
-
-Signals used (all deterministic, no LLM):
-
-Nodes:
-  - Occurrence count (graph/deduplicator.py's _occurrence_count) — the
-    entity/relationship was independently extracted from more than one
-    chunk. This is the main signal: something the LLM reconstructed the
-    same way from different source text is much less likely to be a
-    one-off hallucination than something seen exactly once.
-  - Has a non-empty description — richer, more grounded extractions
-    tend to come with a description; empty-description nodes are more
-    often a bare label with weaker grounding.
-  - Was involved in a node type conflict during dedup (graph/deduplicator.py's
-    type_conflicts) — the LLM described this entity inconsistently
-    across chunks, which is itself a (mild) signal of shakier grounding.
-
-Relationships:
-  - Occurrence count, same rationale as nodes.
-  - Endpoint node confidence — a relationship can't be more trustworthy
-    than the shakier of the two entities it connects.
-  - Was involved in a direction conflict during dedup (graph/deduplicator.py's
-    direction_conflicts) — the LLM disagreed with itself about which way
-    the relationship points.
-  - Corroborated by the Rule-based Requirement Linker (parser/requirement_linker.py):
-    if the relationship's source requirement item is one that the
-    (independent, non-LLM) linker also found to have at least one
-    exact-ID cross-reference, that's a second, unrelated signal pointing
-    the same direction — a modest confidence boost.
+Calculates deterministic confidence scores for deduplicated nodes and
+relationships based on occurrence frequency, metadata richness, and conflict signals.
 """
 
 LOW_CONFIDENCE_THRESHOLD = 0.5

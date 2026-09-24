@@ -132,16 +132,24 @@ def _write_node(tx, node, batch_id=None):
 
 def _write_relationship(tx, rel):
     doc_id = rel.get("doc_id") or rel.get("source_document")
-    doc_set = "SET r.doc_id = $doc_id" if doc_id else ""
+    source = rel.get("source")
+    sets = []
+    if doc_id:
+        sets.append("r.doc_id = $doc_id")
+    if source:
+        sets.append("r.source = $source")
+    set_clause = ("SET " + ", ".join(sets)) if sets else ""
     query = f"""
     MATCH (a:Entity {{id: $from_id}})
     MATCH (b:Entity {{id: $to_id}})
     MERGE (a)-[r:{rel['type']}]->(b)
-    {doc_set}
+    {set_clause}
     """
     params = dict(from_id=rel["from"], to_id=rel["to"])
     if doc_id:
         params["doc_id"] = doc_id
+    if source:
+        params["source"] = source
     tx.run(query, **params)
 
 
@@ -443,10 +451,10 @@ def get_all_relationships() -> list:
     def fn(session):
         result = session.run(
             "MATCH (a:Entity)-[r]->(b:Entity) "
-            "RETURN a.id AS from, b.id AS to, type(r) AS rel_type"
+            "RETURN a.id AS from, b.id AS to, type(r) AS rel_type, r.source AS source, r.doc_id AS doc_id"
         )
         return [
-            {"from": r["from"], "to": r["to"], "type": r["rel_type"]}
+            {"from": r["from"], "to": r["to"], "type": r["rel_type"], "source": r["source"], "doc_id": r["doc_id"]}
             for r in result
         ]
     return _run_with_retry(fn) or []

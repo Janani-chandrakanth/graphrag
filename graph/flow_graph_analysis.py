@@ -1,49 +1,8 @@
 """
-graph/flow_graph_analysis.py — real flow-graph analysis (dominators,
-depth-first spanning tree, back-edge / natural-loop detection),
-applied ONLY to the subset of this project's relationship types that
-actually denote procedural sequence.
+graph/flow_graph_analysis.py
 
-WHY THIS MODULE EXISTS
-
-graph_visualizer.py's original "flow start = zero incoming edges"
-heuristic treated every relationship type in graph/schemas.py's
-ALLOWED_RELATIONS as if it meant "this happens, then that happens."
-It doesn't: USES/PART_OF/SUPPORTS/DEPENDS_ON/ASSOCIATED_WITH/
-REFERENCES/... are structural or justificatory edges (dependency,
-composition, evidence), not control-flow edges. A node can have zero
-incoming SUPPORTS/USES edges and still not be where a user's journey
-begins — which is exactly the bug: a node reachable only by an
-outgoing SUPPORTS edge got marked as a flow start, then "the next
-step" didn't follow, because SUPPORTS was never a step transition to
-begin with.
-
-This module is the fix: restrict analysis to FLOW_RELATIONS (the
-subset that genuinely means "leads to the next state/action"), then
-apply the actual algorithms from Aho/Lam/Sethi/Ullman ("Compilers:
-Principles, Techniques, and Tools") Section 9.6, "Loops in Flow
-Graphs" — the same chapter this was requested from:
-
-  - Depth-first search / depth-first spanning tree (Algorithm 9.41)
-  - Edge classification: tree / forward (advancing), back / cross
-    (retreating vs cross, per the DFST ancestor test in 9.6.3)
-  - Dominators, via the classic iterative data-flow algorithm
-    (Algorithm 9.38): D(entry) = {entry}; D(n) = {n} UNION
-    (intersection of D(p) for every predecessor p of n), iterated to
-    a fixed point.
-  - True back edges: a retreating edge a -> b is only a genuine BACK
-    edge (and therefore the start of a natural LOOP) if b actually
-    DOMINATES a (b in D(a)) — not just "b is an ancestor in this one
-    DFST", which is what distinguishes a real loop from an artifact of
-    DFS traversal order (the chapter's "reducibility" discussion).
-  - Natural loops, via Algorithm 9.46: for back edge n -> d, the loop
-    is {d} plus every node that can reach n without passing through d.
-
-None of this runs on the full heterogeneous entity graph — only on
-the flow subgraph. Nodes/edges outside FLOW_RELATIONS are left alone
-by this module entirely; graph_visualizer.py still draws them, they
-just don't get a step number or "flow start" marker, because they
-were never really flow edges.
+Performs procedural control-flow analysis on sequence relationships, computing
+depth-first spanning trees, dominator sets, and natural loop detections.
 """
 
 # Relation types that denote an actual state/action transition — "this

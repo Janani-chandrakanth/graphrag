@@ -5,6 +5,7 @@ then embeds and stores them in ChromaDB for semantic search.
 Uses direct requests.post to avoid Ollama SDK proxy issue.
 """
 
+import json
 import requests
 from config import OLLAMA_URL
 from embeddings.embedding_model import generate_embedding

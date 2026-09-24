@@ -1,27 +1,7 @@
 """
-Prompt Library
+prompts/prompt_library.py
 
-Closes gap #3 from the architecture review: graph/negative_scenario_generator.py
-had exactly ONE hardcoded style baked directly into the module — no way
-to pick "Gherkin style" vs "regression suite" vs "edge-case focused"
-without editing source code, and nothing saved across sessions.
-
-Deliberately a small file-backed JSON store, not a database table —
-this is app CONFIG (prompt styles), not knowledge-graph data. Neo4j/
-Chroma stay reserved for the actual KB, matching how the rest of this
-project separates "extracted knowledge" from "pipeline configuration"
-(e.g. config.py's plain constants for model names / URLs).
-
-Every entry uses the SAME placeholders
-graph/negative_scenario_generator.py's original _NEGATIVE_PROMPT
-always used ({req_ids}, {actor}, {feature}, {steps}, {expected_result},
-{catalog}) — swapping the ACTIVE template never changes the call site's
-shape, only which wording/style gets sent to the LLM.
-
-Versioning: saving under a name that already exists APPENDS a new
-version rather than overwriting — "Save as New Template" with a name
-you've used before means "here's a revision", and no prior version is
-ever silently lost.
+Manages file-backed JSON prompt templates, versions, and active prompt configurations.
 """
 
 import json

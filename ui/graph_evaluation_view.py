@@ -71,41 +71,6 @@ def render_graph_quality_section():
 
     st.write("")
 
-    # 3. Knowledge Graph & Flow Analysis
-    st.subheader("Knowledge Graph & Flow Analysis")
-    
-    try:
-        detailed_flow = analyze_flow_detailed(nodes, rels)
-        flow_analysis = detailed_flow.get("flow_analysis", {})
-        
-        f1, f2, f3, f4 = st.columns(4)
-        f1.metric("Total Nodes / Rels", f"{len(nodes)} / {len(rels)}")
-        f2.metric("Graph Health Score", detailed_flow.get("health_score", "Unknown"))
-        f3.metric("Isolated Nodes", len(detailed_flow.get("isolated_nodes", {})))
-        f4.metric("Workflow Entry Points", len(flow_analysis.get("entry_ids", [])))
-
-        sf1, sf2, sf3 = st.columns(3)
-        sf1.write(f"Connected Components: {detailed_flow.get('connected_components_count', 0)}")
-        sf2.write(f"Branches: {detailed_flow.get('branches_count', 0)} | Merges: {detailed_flow.get('merges_count', 0)}")
-        sf3.write(f"Natural Loops: {detailed_flow.get('loops_count', 0)}")
-
-        isolated_dict = detailed_flow.get("isolated_nodes", {})
-        if isolated_dict:
-            with st.expander(f"View Isolated Nodes & Explanations ({len(isolated_dict)})"):
-                isolated_list = []
-                for nid, info in isolated_dict.items():
-                    isolated_list.append({
-                        "Node ID": nid,
-                        "Node Name": info.get("name"),
-                        "Type": info.get("type"),
-                        "Reason": info.get("reason"),
-                        "Source": info.get("source")
-                    })
-                st.dataframe(pd.DataFrame(isolated_list), use_container_width=True)
-    except Exception as flow_err:
-        st.error(f"Error running detailed flow analysis: {flow_err}")
-        return
-
     # Checkbox to render interactive graphs
     show_graph = st.checkbox(
         f"Show Interactive Knowledge Graphs (currently {len(nodes)} nodes — check this to render)",

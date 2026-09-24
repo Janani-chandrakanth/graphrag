@@ -1,22 +1,8 @@
 """
 graph/failure_trace.py
- This module reuses the dominator
-sets graph/flow_graph_analysis.py already computes for a completely
-different purpose (and now exposes via analyze_flow()'s "dominators"
-key) to build a root-cause candidate list for a failed test case.
 
-Why dominators are the right tool for this: dominator(D) of node N means
-"every path to N passes through D" (see flow_graph_analysis.py's own
-docstring / the Dragon Book chapter this project is built on). If a test
-case fails at node N, every node that dominates N is a step that
-DEFINITELY executed successfully before the failure point -- so the
-actual defect is either AT the failing node, or in something that is
-NOT a dominator (a sibling branch, a structural dependency the flow
-walk doesn't see). Ordering the dominator set by sequence position turns
-that into a readable "these are the steps that ran before this broke"
-trace, instead of a flat unordered set.
-
-This module is READ-ONLY -- it never writes to Neo4j.
+Performs root-cause candidate tracing for failed test cases by analyzing
+dominator paths and predecessor flow steps in the knowledge graph.
 """
 
 from graph.flow_graph_analysis import analyze_flow

@@ -10,6 +10,7 @@ llm/llm_client.complete — per the scoping decision for this flow
 (Ollama only, matching the rest of f-8).
 """
 
+import json
 from parser.llm_client import call_ollama, extract_json_block
 
 _SYSTEM_PROMPT = (

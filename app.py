@@ -1,3 +1,6 @@
+import os
+os.environ["UUID_UTILS_PURE_PYTHON"] = "1"
+
 import streamlit as st
 import importlib
 import graph.structural_linker
@@ -87,7 +90,6 @@ from ui.dashboard_tab import render_dashboard_tab
 from ui.update_graph_tab import render_update_graph_tab
 from ui.compare_tab import render_compare_tab
 from ui.query_graph_tab import render_query_graph_tab
-# from ui.workflow_tab import render_workflow_tab
 from ui.feature_flow_tab import render_feature_flow_tab
 from ui.graph_controls import render_graph_toolbar
 from ui.graph_evaluation_view import render_graph_quality_section

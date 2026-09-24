@@ -37,11 +37,14 @@ def call_ollama(prompt: str, timeout: int = 120, num_ctx: int = 8192, model: str
     it just doesn't have that model.
     """
     target_url = base_url or OLLAMA_URL
+    target_model = model or MODEL
+    
+    # Try primary endpoint with a fast connect timeout (3s) to detect unreachable remote hosts
     try:
         response = requests.post(
             f"{target_url}/api/generate",
             json={
-                "model":  model or MODEL,
+                "model":  target_model,
                 "prompt": prompt,
                 "stream": False,
                 "options": {
@@ -53,12 +56,35 @@ def call_ollama(prompt: str, timeout: int = 120, num_ctx: int = 8192, model: str
                 }
             },
             proxies={"http": None, "https": None},
-            timeout=timeout
+            timeout=(3, timeout)
         )
         response.raise_for_status()
         return {"raw": response.json()["response"], "error": None}
-    except requests.exceptions.ConnectionError as e:
-        return {"raw": "", "error": f"Cannot reach Ollama server at {target_url}: {str(e)}"}
+    except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as primary_err:
+        # Fallback to local Ollama if primary remote URL is unreachable
+        local_url = "http://localhost:11434"
+        if target_url != local_url:
+            try:
+                tag_resp = requests.get(f"{local_url}/api/tags", timeout=2)
+                if tag_resp.status_code == 200:
+                    installed = [m["name"] for m in tag_resp.json().get("models", []) if "embed" not in m["name"]]
+                    local_model = target_model if target_model in installed else (installed[0] if installed else "llama3.2:latest")
+                    fallback_resp = requests.post(
+                        f"{local_url}/api/generate",
+                        json={
+                            "model": local_model,
+                            "prompt": prompt,
+                            "stream": False,
+                            "options": {"temperature": 0, "seed": 42, "top_p": 1, "top_k": 1, "num_ctx": num_ctx}
+                        },
+                        proxies={"http": None, "https": None},
+                        timeout=timeout
+                    )
+                    fallback_resp.raise_for_status()
+                    return {"raw": fallback_resp.json()["response"], "error": None}
+            except Exception:
+                pass
+        return {"raw": "", "error": f"Cannot reach Ollama server at {target_url}: {str(primary_err)}"}
     except requests.exceptions.Timeout:
         return {"raw": "", "error": f"Ollama request to {target_url} timed out ({timeout}s)"}
     except requests.exceptions.HTTPError as e:

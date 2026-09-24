@@ -42,14 +42,46 @@ Successful login [Feature: Biometric Authentication]"). Output valid Gherkin onl
 no extra commentary before or after it."""
 
 
-def generate_bdd_test_suite(story_text: str, context: dict, model: str = None) -> dict:
+def generate_bdd_test_suite(story_text_or_nodes, context_or_rels=None, model: str = None) -> dict:
     """
-    Returns {"gherkin": str, "error": Optional[str]} — never raises;
-    a failed call surfaces as an empty gherkin + error string, same
-    convention parser/llm_client.call_ollama already uses, so the
-    caller can decide how to degrade (e.g. keep the previous suite on
-    screen rather than blanking it out).
+    Supports dual signatures:
+    1. generate_bdd_test_suite(nodes: list, rels: list)
+    2. generate_bdd_test_suite(story_text: str, context: dict)
+
+    Returns {"gherkin_suite": str, "test_cases": list, "error": Optional[str]}
     """
+    if isinstance(story_text_or_nodes, list):
+        nodes = story_text_or_nodes
+        rels = context_or_rels if isinstance(context_or_rels, list) else []
+        from graph.graph_test_case_generator import generate_test_cases_from_graph
+        graph_res = generate_test_cases_from_graph(nodes, rels)
+        test_cases = graph_res.get("test_cases", [])
+        
+        gherkin_lines = ["Feature: Knowledge Graph Grounded Feature Suite\n"]
+        for tc in test_cases:
+            title = tc.get("title", "Scenario")
+            tc_id = tc.get("tc_id", "TC-001")
+            prec = tc.get("precondition") or "System is initialized"
+            exp = tc.get("expected_result") or "Operation completes successfully"
+            gherkin_lines.append(f"  Scenario: {title} [{tc_id}]")
+            gherkin_lines.append(f"    Given {prec}")
+            steps = tc.get("steps", [])
+            if steps:
+                gherkin_lines.append(f"    When {steps[0]}")
+                for s in steps[1:]:
+                    gherkin_lines.append(f"    And {s}")
+            gherkin_lines.append(f"    Then {exp}\n")
+        
+        suite_text = "\n".join(gherkin_lines)
+        return {
+            "gherkin_suite": suite_text,
+            "gherkin": suite_text,
+            "test_cases": test_cases,
+            "error": None
+        }
+
+    story_text = str(story_text_or_nodes or "")
+    context = context_or_rels if isinstance(context_or_rels, dict) else {}
     prompt = _USER_PROMPT_TEMPLATE.format(
         system=_SYSTEM_PROMPT,
         story=story_text,
@@ -60,9 +92,13 @@ def generate_bdd_test_suite(story_text: str, context: dict, model: str = None) -
         acceptance_criteria=json.dumps(context.get("acceptance_criteria", [])),
     )
     result = call_ollama(prompt, model=model, num_ctx=8192)
-    if result["error"]:
-        return {"gherkin": "", "error": result["error"]}
-    return {"gherkin": result["raw"].strip(), "error": None}
+    if result.get("error"):
+        return {"gherkin_suite": "", "gherkin": "", "test_cases": [], "error": result["error"]}
+    
+    raw_gherkin = result["raw"].strip()
+    parsed_cases = parse_gherkin_to_cases(raw_gherkin)
+    return {"gherkin_suite": raw_gherkin, "gherkin": raw_gherkin, "test_cases": parsed_cases, "error": None}
+
 
 
 # ─────────────────────────────────────────────────────────────────

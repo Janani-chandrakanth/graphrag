@@ -1,41 +1,8 @@
 """
 graph/semantic_classifier.py
-Phase 1 of the Feature Flow Enhancement.
 
-Hybrid deterministic + LLM approach to classifying source graph nodes and
-relationships into semantic roles. This is the foundation for:
-
-  * Feature Flow feature extraction (Phase 2)
-  * Correct evaluation coverage universe (Phase 6/7)
-
-Design principles:
-  - Deterministic rules run FIRST and cover the majority of clear-cut cases.
-  - LLM is called only ONCE, in batch, for genuinely ambiguous nodes/edges.
-  - TestCase artifact nodes are always "artifact" — never enter the
-    source workflow coverage universe.
-  - No per-node, no per-click LLM calls.
-
-Node roles:
-  actor           – a person, role, or system acting in the workflow
-  workflow_step   – an executable action in a user/business workflow
-  workflow_state  – a stable state the system/process can be in
-  input           – data/value provided by an actor or system
-  business_rule   – a policy or constraint governing the workflow
-  requirement     – a formal requirement node (FR, NFR, BR, ...)
-  module          – a software module, system component, or screen
-  ui_element      – a UI widget, form, button, page
-  metadata        – label, description, attribute, identifier
-  artifact        – generated artefacts (TestCase nodes, etc.)
-  other           – anything that does not fit above
-
-Edge roles:
-  workflow_transition – "X then Y" — an actual state/action transition
-  dependency          – "X requires/depends on Y"
-  business_rule       – "X is governed by rule Y"
-  attribute           – "X has attribute/property Y"
-  semantic_relation   – meaningful but not directly executable link
-  metadata            – structural/document-level link (NEXT_IN_DOCUMENT, etc.)
-  other               – anything that does not fit above
+Classifies Knowledge Graph nodes and relationships into semantic roles (actors, steps,
+states, rules, inputs, metadata, etc.) using hybrid deterministic rules and targeted LLM calls.
 """
 
 import json
@@ -67,7 +34,7 @@ _TYPE_TO_ROLE: Dict[str, str] = {
     "Process":              "workflow_step",
     "Task":                 "workflow_step",
     "Operation":            "workflow_step",
-    "Feature":              "module",          # Feature = top-level module/container, not individual step
+    "Feature":              "workflow_step",    # Feature step / workflow item
     "State":                "workflow_state",
     "WorkflowState":        "workflow_state",
     "Status":               "workflow_state",

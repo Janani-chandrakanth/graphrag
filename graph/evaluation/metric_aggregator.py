@@ -217,14 +217,16 @@ def aggregate_metrics(
     workflow_res = _llm_augmented_flow_correctness(workflow_res, judgments_index, unique_tcs)
 
     # 3. Final metric values
-    node_cov = node_edge_res.get("node_coverage_pct", 0.0)
+    node_cov = node_edge_res.get("node_coverage_pct", 0.0)           # full graph (informational)
+    proc_cov = node_edge_res.get("procedural_node_coverage_pct", node_cov)  # Issue 4: FLOW-only
     edge_cov = node_edge_res.get("edge_coverage_pct", 0.0)
     wf_cov = workflow_res.get("workflow_coverage_pct", 0.0)
     flow_corr = workflow_res.get("flow_correctness_pct", 0.0)
     tc_corr = grounding_res.get("test_case_correctness_pct", 0.0)
 
+    # Issue 4: overall_coverage uses procedural coverage (more meaningful for flow adequacy)
     overall_coverage = round(
-        0.30 * node_cov
+        0.30 * proc_cov
         + 0.25 * edge_cov
         + 0.25 * wf_cov
         + 0.10 * flow_corr
@@ -248,7 +250,8 @@ def aggregate_metrics(
             "duplicate_test_cases": dedup_res.get("duplicate_test_cases", []),
         },
         "summary": {
-            "node_coverage": node_cov,
+            "node_coverage": node_cov,                     # Full graph (informational)
+            "procedural_node_coverage": proc_cov,          # Issue 4: FLOW-only nodes
             "edge_coverage": edge_cov,
             "workflow_coverage": wf_cov,
             "flow_correctness": flow_corr,
@@ -257,6 +260,7 @@ def aggregate_metrics(
             "unique_test_cases_count": dedup_res.get("unique_test_cases_count", 0),
             "duplicate_test_cases_count": dedup_res.get("duplicate_test_cases_count", 0),
             "total_nodes": node_edge_res.get("total_nodes", 0),
+            "procedural_nodes_total": node_edge_res.get("procedural_node_total", 0),
             "total_workflow_edges": node_edge_res.get("total_workflow_edges", 0),
             "llm_rescued_node_count": node_edge_res.get("llm_rescued_node_count", 0),
         },

@@ -7,6 +7,7 @@ Complete GraphRAG query pipeline with level selection:
   AUTO  → automatically picks the best level
 """
 
+import json
 import requests
 from config import OLLAMA_URL
 from embeddings.embedding_model import generate_embedding

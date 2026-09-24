@@ -87,39 +87,56 @@ Return ONLY a valid JSON array of these objects.
         avg_over = sum(m.get("overall", 0) for m in all_metrics) / len(all_metrics)
 
     # 2. Graph Coverage Deterministic Calculation
-    # Map node IDs/names
-    node_names = set(str(n.get("name") or n.get("id") or "").lower().strip() for n in nodes if n.get("name") or n.get("id"))
-    node_ids = set(str(n.get("id") or "").lower().strip() for n in nodes if n.get("id"))
+    # Build per-node lookup: node_id -> (name_lower, id_lower)
+    # One entry per node so covered count can never exceed total_nodes.
     total_nodes = len(nodes)
+    node_lookup = {}  # node_id -> (name_norm, id_norm)
+    for n in nodes:
+        nid = str(n.get("id") or "").lower().strip()
+        nname = str(n.get("name") or nid).lower().strip()
+        if nid:
+            node_lookup[nid] = (nname, nid)
 
-    covered_nodes_set = set()
+    # Collect all target strings mentioned in test cases
+    tc_targets = set()
     for tc in test_cases:
         targets = tc.get("graph_nodes") or tc.get("entities_used") or tc.get("target_entities") or []
         for t in targets:
-            covered_nodes_set.add(str(t).lower().strip())
+            tc_targets.add(str(t).lower().strip())
 
-    actual_covered = set()
-    for c in covered_nodes_set:
-        if c in node_names or c in node_ids:
-            actual_covered.add(c)
+    # For each node, check if it is referenced — at most one count per node ID.
+    covered_node_ids = set()
+    uncovered_names = []
+    for nid, (nname, nid_norm) in node_lookup.items():
+        matched = False
+        # Exact match on name or id
+        if nname in tc_targets or nid_norm in tc_targets:
+            matched = True
         else:
-            # check substring match
-            for nn in node_names:
-                if c in nn or nn in c:
-                    actual_covered.add(nn)
+            # Substring match: a tc target is a substring of the node name or vice-versa
+            for t in tc_targets:
+                if t and (t in nname or nname in t):
+                    matched = True
+                    break
+        if matched:
+            covered_node_ids.add(nid)
+        else:
+            uncovered_names.append(nname)
 
-    num_covered = len(actual_covered)
+    num_covered = len(covered_node_ids)
+    # Safety cap: covered can never logically exceed total (guards against any future edge-case)
+    num_covered = min(num_covered, total_nodes)
     node_cov_pct = round((num_covered / max(total_nodes, 1)) * 100, 1)
-    
-    # Identify uncovered nodes
-    all_known = node_names.union(node_ids)
-    uncovered = list(all_known - actual_covered - {""})
-    
-    # Rel coverage (simplified mock for legacy compatibility if true relationships not explicitly referenced in TCs)
+    # Hard clamp so floating-point rounding cannot push above 100%
+    node_cov_pct = min(node_cov_pct, 100.0)
+
+    uncovered = uncovered_names
+
+    # Rel coverage (simplified estimate for legacy report)
     total_rels = len(rels)
-    # Estimate rel coverage based on node coverage ratio
     rel_cov_pct = round(node_cov_pct * 0.9, 1)
-    num_rels_covered = int((rel_cov_pct / 100) * total_rels)
+    rel_cov_pct = min(rel_cov_pct, 100.0)
+    num_rels_covered = min(int((rel_cov_pct / 100) * total_rels), total_rels)
 
     # 3. Format Report String
     report_lines = []

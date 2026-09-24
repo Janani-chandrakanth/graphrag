@@ -13,6 +13,7 @@ Flow:
 3. ROOT level — merge ALL communities into one, summarize everything
 """
 
+import json
 import requests
 import math
 from config import OLLAMA_URL

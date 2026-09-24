@@ -1,28 +1,8 @@
 """
-graph/cross_reference_linker.py — cross-requirement semantic linking.
+graph/cross_reference_linker.py
 
-Why this exists:
-    graph/entity_extractor.py runs per chunk, in isolation — it has no
-    visibility into what any other chunk extracted. graph/structural_linker.py's
-    backbone compensates for this at the REQUIREMENT level (which item
-    comes after which, which item references which by exact ID) but
-    not at the ENTITY level — it can't tell you that "check_in_date"
-    (extracted from BR_STAY_6) is a real precondition for something
-    extracted from BR_STAY_7, if the two chunks never saw each other's
-    text.
-
-    This module runs ONE MORE LLM call per requirement item — after
-    Entity Resolution/dedup, so it works from the final deduplicated
-    entity catalog rather than noisy per-chunk duplicates — giving each
-    item's own text a catalog of entities already extracted from every
-    OTHER item, and asking only: "does this requirement's content
-    relate to anything in that catalog?"
-
-    COST TRADEOFF — be aware before enabling this on a large document:
-    this is +1 LLM call per valid item, on top of the existing one call
-    per chunk. For a 21-item BRD, that's 21 additional calls — roughly
-    doubling total LLM call volume for that document. This is NOT a
-    free upgrade; it trades latency/cost for relationship accuracy.
+Discovers semantic cross-requirement relationships by analyzing requirement text
+against the deduplicated catalog of entities extracted from other requirements.
 """
 
 import json

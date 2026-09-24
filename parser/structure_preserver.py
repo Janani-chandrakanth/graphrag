@@ -1,26 +1,8 @@
 """
-Structure Preserver
+parser/structure_preserver.py
 
-Defines a format-agnostic, structured representation of a parsed document
-(headings, paragraphs, list items, tables, images) and renders it back out
-to structure-preserving Markdown.
-
-Why this exists:
-    The old parser.py flattened everything to plain text (tables became
-    " | " joined strings, headings and body text were indistinguishable,
-    images vanished entirely). Downstream steps in the new pipeline
-    (Document Type Detector, Template Normalizer) need to know *where*
-    a requirement ID sits — is it a heading? a table row? a list item? —
-    to normalize it correctly. This module is the shared contract between
-    the format-specific extractors (docx/pdf/txt) and everything downstream.
-
-Blocks are kept in original document order. Each block type:
-
-    heading     -> content: str,            level: 1-6
-    list_item   -> content: str,            level: indent depth (1+)
-    paragraph   -> content: str
-    table       -> content: List[List[str]] (rows, first row = header)
-    image       -> content: dict {"alt": str, "index": int}
+Defines format-agnostic structured document representations (headings, paragraphs, lists, tables, images)
+and exports them to markdown.
 """
 
 from dataclasses import dataclass, field

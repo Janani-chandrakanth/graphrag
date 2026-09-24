@@ -1,55 +1,8 @@
 """
-graph/negative_scenario_generator.py — opt-in LLM pass for negative /
-edge-case test scenarios, strictly grounded in the graph.
+graph/negative_scenario_generator.py
 
-Why this exists: graph/graph_test_case_generator.py is fully
-deterministic — it can only ever restate what the document/graph
-already explicitly contains. Its negative-detection
-(_classify_type()'s cue-word scan) only fires when the SOURCE TEXT
-itself already uses failure language ("invalid", "denied", ...). A
-purely declarative spec ("the system must display currency symbol...")
-never produces a negative test case that way, not because of a bug,
-but because there is nothing in the text or graph FOR a deterministic
-walk to point at. Proposing "what if this fails" requires reasoning —
-which requires an LLM call. This module is that call, added as an
-explicit opt-in step (same pattern as parser/canonicalizer.py and
-graph/cross_reference_linker.py), not folded silently into the
-deterministic generator.
-
-STRICT GROUNDING — the whole point of this module:
-    The LLM is given, per requirement series, ONLY the entities
-    (id/type/name) already extracted into the graph for that series —
-    the exact same subgraph graph_test_case_generator.py already
-    walked to build the positive test case. It is explicitly told it
-    may only reference those entities by name; it may NOT invent new
-    entities, external systems, or generic infrastructure ("the
-    database", "the network") that were never actually extracted.
-
-    This is enforced twice, not just requested in the prompt:
-      1. The prompt states the constraint and the exact catalog.
-      2. Every returned scenario's entities_used is checked against
-         that same catalog after the fact — same discipline as
-         graph/cross_reference_linker.py's catalog_ids check. A
-         scenario referencing something outside the catalog is
-         DROPPED and reported in warnings, never silently kept. This
-         is what makes "strict" a verified property, not a prompt
-         instruction taken on faith.
-
-Runs per requirement series (one call per positive test case already
-built by graph_test_case_generator.py) — deliberately not one call for
-the whole document, so grounding stays tied to a specific series'
-actual subgraph and traceability isn't blurred across unrelated
-requirements. Cost is proportional to how many positive test cases
-exist, same tradeoff shape as the Cross-Requirement Linker's
-per-item cost — stated plainly in the UI toggle, not hidden.
-
-Output scenarios use the EXACT SAME dict shape as
-graph_test_case_generator.py's test_cases (tc_id/req_id/title/type/
-priority/actor/feature/precondition/steps/expected_result/graph_nodes/
-source_items/fallbacks) plus two extra fields (llm_derived,
-based_on_tc_id) — so the existing _render_test_case_text() renderer
-works unchanged on these, and the UI can tell graph-derived and
-LLM-derived scenarios apart with one flag instead of two code paths.
+Generates grounded negative and edge-case test scenarios for requirement
+series using an LLM pass, strictly constrained to existing graph entities.
 """
 
 import json

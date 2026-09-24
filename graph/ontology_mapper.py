@@ -1,40 +1,11 @@
 """
-Ontology Mapping Layer — Structural / Domain-Agnostic Version
+graph/ontology_mapper.py
 
-Problem with a hardcoded literal registry (previous version):
-    A regex list of "usd|eur|gbp" only catches currencies.
-    A healthcare document with Penicillin/Aspirin/Ibuprofen as
-    isolated nodes would sail straight through untouched, because
-    nothing in the code recognizes medication names.
-
-Generic fix used here:
-    Detect a STRUCTURAL pattern instead of literal words:
-
-        Several sibling nodes that:
-          - share the same node type (often Attribute/DataObject)
-          - are all leaves (no outgoing relationships)
-          - are all reached via the same relationship type
-            from the same parent node
-
-    That shape is domain-independent. Euro/USD/GBP under
-    "Currency Preference" has the same shape as
-    Penicillin/Aspirin/Ibuprofen under "Medication" —
-    same structural signature, completely different domains.
-
-    Once that shape is detected for a group of >= MIN_GROUP_SIZE
-    siblings, ONE small LLM call asks: "what single business
-    concept do these represent?" The LLM names the canonical
-    concept — nothing is hardcoded per domain.
-
-Pipeline position:
-    extract_entities() -> apply_ontology_mapping() -> deduplicate_graph() -> validate_graph()
-
-Cost control:
-    This adds at most one extra LLM call per detected sibling
-    group per chunk — not per node. Most chunks will trigger
-    zero or one such call.
+Maps structurally clustered sibling leaf entities to canonical domain concepts
+using pattern detection and targeted concept synthesis.
 """
 
+import json
 import requests
 from collections import defaultdict
 from config import OLLAMA_URL

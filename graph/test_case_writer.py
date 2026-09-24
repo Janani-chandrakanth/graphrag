@@ -1,25 +1,8 @@
 """
-Test Case Graph Writer
+graph/test_case_writer.py
 
-Closes a loop this project's architecture review flagged as missing:
-generated test cases (graph/graph_test_case_generator.py's output)
-existed only as Python dicts — never written back into Neo4j — so
-"which KB node inspired this test step" lived only in a `graph_nodes`
-name-list inside that dict, not as a real, queryable graph edge.
-
-This adapts the GraphRAG proposal's
-    (Test Case) -[VALIDATES]-> (Acceptance Criteria)
-to this project's ACTUAL ontology: there's no dedicated
-AcceptanceCriteria node type extracted yet, so VALIDATES points at
-whichever domain nodes the test case's walk actually touched — those
-ARE the acceptance-relevant entities for that scenario. This is the
-Traceability Map from the proposal, made real:
-    (TestCase) -[VALIDATES]-> (Screen/Action/DataObject/... node)
-    (TestCase) -[VERIFIES]->  (the source Requirement node, if resolvable)
-
-Design (deterministic, MERGE-idempotent — same pattern as
-graph/neo4j_manager.py's insert_graph; re-running generation + writing
-never duplicates, it overwrites):
+Converts generated test cases into TestCase graph nodes and traceability edges (VALIDATES/VERIFIES)
+and persists them into Neo4j.
 """
 
 from graph.neo4j_manager import insert_graph, get_all_nodes

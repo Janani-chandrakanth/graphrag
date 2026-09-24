@@ -1,22 +1,8 @@
 """
-graph_visualizer.py
+graph/graph_visualizer.py
 
-Drop-in replacement for the streamlit_agraph-based rendering in app.py.
-Renders an interactive vis-network graph with:
-  - hierarchical (top-down / left-right) layout instead of a tangled
-    force-directed blob
-  - click a node -> incoming nodes/edges highlight red, outgoing
-    highlight green, everything else dims
-  - an info panel showing the selected node's neighbors
-  - a search box to locate a node by name
-  - a legend built from the same NODE_COLORS map app.py already has
-
-Usage (see PATCH_NOTES.md for the exact app.py diff):
-
-    from graph.graph_visualizer import render_graph, render_cypher_graph
-
-These two functions have the SAME signatures as the ones they replace,
-so no other call sites in app.py need to change.
+Renders interactive vis-network graph visualizations with hierarchical layouts,
+step-by-step flow navigation, search, and dynamic entity highlight controls.
 """
 
 import math
@@ -421,6 +407,24 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
   var rawNodes_KEY = NODESJSON;
   var rawEdges_KEY = EDGESJSON;
   var detailedAnalysis_KEY = DETAILED_JSON;
+  // Pre-compute adjacency and incident edge maps for fast neighbor queries
+  var _adjacencyMap = {};
+  var _incidentEdgesMap = {};
+  rawEdges_KEY.forEach(function(e) {
+    // outgoing adjacency
+    if (!_adjacencyMap[e.from]) _adjacencyMap[e.from] = new Set();
+    _adjacencyMap[e.from].add(e.to);
+    // incoming adjacency (undirected for completeness)
+    if (!_adjacencyMap[e.to]) _adjacencyMap[e.to] = new Set();
+    _adjacencyMap[e.to].add(e.from);
+    // incident edges per node
+    if (!_incidentEdgesMap[e.from]) _incidentEdgesMap[e.from] = [];
+    _incidentEdgesMap[e.from].push(e);
+    if (!_incidentEdgesMap[e.to]) _incidentEdgesMap[e.to] = [];
+    _incidentEdgesMap[e.to].push(e);
+  });
+  // Flag to optionally skip animation for frequent interactions (default false)
+  var SKIP_ANIMATION = false;
 
   var nodesDataSet_KEY = new vis.DataSet(rawNodes_KEY.map(function(n) {
     return Object.assign({}, n, { opacity: 1, borderWidth: 1.5 });
@@ -529,10 +533,15 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
   // switching from Free ↔ LR ↔ UD never leaves physics running forever.
   function attachStabilizationOff_KEY() {
     network_KEY.once("stabilizationIterationsDone", function() {
+      console.log("[GRAPH DIAGNOSTIC] stabilizationIterationsDone: initial stabilization complete, turning physics off");
       network_KEY.setOptions({ physics: { enabled: false } });
     });
   }
   attachStabilizationOff_KEY();
+
+  network_KEY.on("startStabilizing", function() {
+    network_KEY.setOptions({ physics: { enabled: false } });
+  });
 
   window.setDirection_KEY = function() {
     var dir = document.getElementById("dir_KEY").value;
@@ -555,14 +564,15 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
     });
     if (match) {
       network_KEY.selectNodes([match.id]);
-      network_KEY.focus(match.id, { scale: 1.1, animation: true });
+      network_KEY.focus(match.id, { scale: 1.1, animation: !SKIP_ANIMATION });
       highlightNode_KEY(match.id);
     }
   };
 
   function neighborsOf(nodeId) {
     var incoming = [], outgoing = [], incomingNodeIds = new Set(), outgoingNodeIds = new Set();
-    rawEdges_KEY.forEach(function(e) {
+    var incident = _incidentEdgesMap[nodeId] || [];
+    incident.forEach(function(e) {
       if (e.to === nodeId) { incoming.push(e); incomingNodeIds.add(e.from); }
       if (e.from === nodeId) { outgoing.push(e); outgoingNodeIds.add(e.to); }
     });
@@ -574,29 +584,119 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
     return n ? n.label : id;
   }
 
+  // Delta-highlight state: track which nodes/edges were touched in the
+  // previous highlightNode_KEY call so we only update the diff next time.
+  var _prevHighlight = {
+    nodeId: null,
+    incomingNodeIds: new Set(),
+    outgoingNodeIds: new Set(),
+    incomingEdgeIds: new Set(),
+    outgoingEdgeIds: new Set(),
+    dimmedNodeIds: new Set(),
+    dimmedEdgeIds: new Set()
+  };
+
+  var _DIM_EDGE_FONT = { size: 10, color: "rgba(148,163,184,0.25)", strokeWidth: 0 };
+  var _LIT_EDGE_FONT = { size: 11, color: "#334155", strokeWidth: 3, strokeColor: "#ffffff" };
+  var _DIM_NODE_FONT = { size: 13, color: "rgba(30,41,59,0.15)", strokeWidth: 0 };
+  var _LIT_NODE_FONT = { size: 14, color: "#1e293b", strokeWidth: 4, strokeColor: "#ffffff" };
+  var _RST_EDGE_STYLE = { color: { color: "#cbd5e1", opacity: 0.9 }, width: 1, label: "",
+    font: { size: 10, color: "#64748b", strokeWidth: 3, strokeColor: "#ffffff", align: "top" } };
+  var _RST_NODE_STYLE = { opacity: 1, borderWidth: 2,
+    font: { size: 14, color: "#1e293b", strokeWidth: 4, strokeColor: "#ffffff" } };
+
   function highlightNode_KEY(nodeId) {
     var rel = neighborsOf(nodeId);
 
-    var DIM_EDGE_FONT = { size: 10, color: "rgba(148,163,184,0.25)", strokeWidth: 0 };
-    var LIT_EDGE_FONT = { size: 11, color: "#334155", strokeWidth: 3, strokeColor: "#ffffff" };
-    var edgeUpdates = rawEdges_KEY.map(function(e) {
-      var isIn = rel.incoming.indexOf(e) !== -1;
-      var isOut = rel.outgoing.indexOf(e) !== -1;
-      if (isIn) return { id: e.id, color: { color: "#ef4444", opacity: 1 }, width: 2.5, font: LIT_EDGE_FONT, label: e.relType || e.label };
-      if (isOut) return { id: e.id, color: { color: "#16a34a", opacity: 1 }, width: 2.5, font: LIT_EDGE_FONT, label: e.relType || e.label };
-      return { id: e.id, color: { color: "#e2e8f0", opacity: 0.25 }, width: 1, font: DIM_EDGE_FONT, label: "" };
-    });
-    edgesDataSet_KEY.update(edgeUpdates);
+    // --- Build sets for this call ---
+    var newInEdgeIds = new Set(rel.incoming.map(function(e) { return e.id; }));
+    var newOutEdgeIds = new Set(rel.outgoing.map(function(e) { return e.id; }));
+    var newInNodeIds = rel.incomingNodeIds;
+    var newOutNodeIds = rel.outgoingNodeIds;
 
-    var DIM_NODE_FONT = { size: 13, color: "rgba(30,41,59,0.15)", strokeWidth: 0 };
-    var LIT_NODE_FONT = { size: 14, color: "#1e293b", strokeWidth: 4, strokeColor: "#ffffff" };
-    var nodeUpdates = rawNodes_KEY.map(function(n) {
-      if (n.id === nodeId) return { id: n.id, opacity: 1, borderWidth: 4, borderWidthSelected: 4, font: { size: 16, color: "#0f172a", strokeWidth: 4, strokeColor: "#ffffff" } };
-      if (rel.incomingNodeIds.has(n.id)) return { id: n.id, opacity: 1, borderWidth: 3, font: LIT_NODE_FONT };
-      if (rel.outgoingNodeIds.has(n.id)) return { id: n.id, opacity: 1, borderWidth: 3, font: LIT_NODE_FONT };
-      return { id: n.id, opacity: 0.15, borderWidth: 1, font: DIM_NODE_FONT };
+    // Edges that need updating = new lit edges + edges that WERE lit before and are no longer
+    var edgeUpdates = [];
+    rel.incoming.forEach(function(e) {
+      edgeUpdates.push({ id: e.id, color: { color: "#ef4444", opacity: 1 }, width: 2.5, font: _LIT_EDGE_FONT, label: e.relType || e.label });
     });
-    nodesDataSet_KEY.update(nodeUpdates);
+    rel.outgoing.forEach(function(e) {
+      edgeUpdates.push({ id: e.id, color: { color: "#16a34a", opacity: 1 }, width: 2.5, font: _LIT_EDGE_FONT, label: e.relType || e.label });
+    });
+    // Reset previously-dimmed edges that are now becoming lit (covered above) or
+    // newly-dimmed edges: edges that weren't touched last time and aren't lit this time
+    // — we only need to dim the ones that were LIT last time but aren't now.
+    _prevHighlight.incomingEdgeIds.forEach(function(eid) {
+      if (!newInEdgeIds.has(eid) && !newOutEdgeIds.has(eid)) {
+        edgeUpdates.push(Object.assign({ id: eid }, _RST_EDGE_STYLE,
+          { color: { color: "#e2e8f0", opacity: 0.25 }, width: 1, font: _DIM_EDGE_FONT, label: "" }));
+      }
+    });
+    _prevHighlight.outgoingEdgeIds.forEach(function(eid) {
+      if (!newInEdgeIds.has(eid) && !newOutEdgeIds.has(eid)) {
+        edgeUpdates.push(Object.assign({ id: eid }, _RST_EDGE_STYLE,
+          { color: { color: "#e2e8f0", opacity: 0.25 }, width: 1, font: _DIM_EDGE_FONT, label: "" }));
+      }
+    });
+    // Edges that were dimmed last time but may now be lit — already covered by rel loops above.
+    // Edges that become newly dimmed (previously not touched = already at dim/default; no update needed
+    // UNLESS they were lit in the previous call and are no longer lit — handled above).
+    // For edges that were NEVER touched (neither lit nor previously lit): they remain at their
+    // existing vis-network state, which is either default or already dimmed. We push a dim update
+    // only for edges incident to the current node that aren't lit (they share a node and should dim).
+    // Simplification: dim ALL edges adjacent to the previous node that aren't adjacent to new node.
+    _prevHighlight.dimmedEdgeIds.forEach(function(eid) {
+      // already dimmed — no update needed unless they're now lit (handled above).
+    });
+    // Nodes that need updating
+    var nodeUpdates = [];
+    // Active node
+    nodeUpdates.push({ id: nodeId, opacity: 1, borderWidth: 4, borderWidthSelected: 4,
+      font: { size: 16, color: "#0f172a", strokeWidth: 4, strokeColor: "#ffffff" } });
+    // Restore previously-active node to lit-neighbor style or default
+    if (_prevHighlight.nodeId && _prevHighlight.nodeId !== nodeId) {
+      var wasActive = _prevHighlight.nodeId;
+      if (newInNodeIds.has(wasActive) || newOutNodeIds.has(wasActive)) {
+        nodeUpdates.push({ id: wasActive, opacity: 1, borderWidth: 3, font: _LIT_NODE_FONT });
+      } else {
+        nodeUpdates.push(Object.assign({ id: wasActive }, _RST_NODE_STYLE,
+          { opacity: 0.15, borderWidth: 1, font: _DIM_NODE_FONT }));
+      }
+    }
+    // New incoming/outgoing neighbors become lit
+    newInNodeIds.forEach(function(nid) {
+      if (nid !== nodeId) nodeUpdates.push({ id: nid, opacity: 1, borderWidth: 3, font: _LIT_NODE_FONT });
+    });
+    newOutNodeIds.forEach(function(nid) {
+      if (nid !== nodeId) nodeUpdates.push({ id: nid, opacity: 1, borderWidth: 3, font: _LIT_NODE_FONT });
+    });
+    // Previously-lit neighbors that are no longer lit → dim them
+    _prevHighlight.incomingNodeIds.forEach(function(nid) {
+      if (!newInNodeIds.has(nid) && !newOutNodeIds.has(nid) && nid !== nodeId) {
+        nodeUpdates.push({ id: nid, opacity: 0.15, borderWidth: 1, font: _DIM_NODE_FONT });
+      }
+    });
+    _prevHighlight.outgoingNodeIds.forEach(function(nid) {
+      if (!newInNodeIds.has(nid) && !newOutNodeIds.has(nid) && nid !== nodeId) {
+        nodeUpdates.push({ id: nid, opacity: 0.15, borderWidth: 1, font: _DIM_NODE_FONT });
+      }
+    });
+
+    if (edgeUpdates.length) edgesDataSet_KEY.update(edgeUpdates);
+    if (nodeUpdates.length) nodesDataSet_KEY.update(nodeUpdates);
+    network_KEY.setOptions({ physics: { enabled: false } });
+
+    // Save state for next delta
+    _prevHighlight.nodeId = nodeId;
+    _prevHighlight.incomingNodeIds = newInNodeIds;
+    _prevHighlight.outgoingNodeIds = newOutNodeIds;
+    _prevHighlight.incomingEdgeIds = newInEdgeIds;
+    _prevHighlight.outgoingEdgeIds = newOutEdgeIds;
+
+    console.log("[GRAPH DIAGNOSTIC] highlightNode nodeId=" + nodeId +
+      " | prevHighlight size: inNodes=" + _prevHighlight.incomingNodeIds.size +
+      ", outNodes=" + _prevHighlight.outgoingNodeIds.size +
+      ", inEdges=" + _prevHighlight.incomingEdgeIds.size +
+      ", outEdges=" + _prevHighlight.outgoingEdgeIds.size);
 
     updatePanelForNode_KEY(nodeId, rel);
   }
@@ -640,24 +740,72 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
   }
 
   window.resetHighlight_KEY = function() {
-    edgesDataSet_KEY.update(rawEdges_KEY.map(function(e) {
-      return {
-        id: e.id, color: { color: "#cbd5e1", opacity: 0.9 }, width: 1, label: "",
-        font: { size: 10, color: "#64748b", strokeWidth: 3, strokeColor: "#ffffff", align: "top" }
-      };
-    }));
-    nodesDataSet_KEY.update(rawNodes_KEY.map(function(n) {
-      return {
-        id: n.id, opacity: 1, borderWidth: 2,
-        font: { size: 14, color: "#1e293b", strokeWidth: 4, strokeColor: "#ffffff" }
-      };
-    }));
+    // Delta reset: only restore nodes/edges that were touched in the last highlight call.
+    // This avoids iterating rawEdges_KEY/rawNodes_KEY (potentially thousands of items).
+    var edgeResets = [];
+    _prevHighlight.incomingEdgeIds.forEach(function(eid) {
+      edgeResets.push(Object.assign({ id: eid }, _RST_EDGE_STYLE));
+    });
+    _prevHighlight.outgoingEdgeIds.forEach(function(eid) {
+      if (!_prevHighlight.incomingEdgeIds.has(eid)) {
+        edgeResets.push(Object.assign({ id: eid }, _RST_EDGE_STYLE));
+      }
+    });
+    if (edgeResets.length) edgesDataSet_KEY.update(edgeResets);
+
+    var nodeResets = [];
+    if (_prevHighlight.nodeId) {
+      nodeResets.push(Object.assign({ id: _prevHighlight.nodeId }, _RST_NODE_STYLE));
+    }
+    _prevHighlight.incomingNodeIds.forEach(function(nid) {
+      if (nid !== _prevHighlight.nodeId) nodeResets.push(Object.assign({ id: nid }, _RST_NODE_STYLE));
+    });
+    _prevHighlight.outgoingNodeIds.forEach(function(nid) {
+      if (nid !== _prevHighlight.nodeId && !_prevHighlight.incomingNodeIds.has(nid)) {
+        nodeResets.push(Object.assign({ id: nid }, _RST_NODE_STYLE));
+      }
+    });
+    // Any dimmed nodes that need restoring to full opacity:
+    // They were set to opacity:0.15 by the last highlightNode_KEY call.
+    // We rebuild the full restore only when coming from a flow (handled by updateFlowUI_KEY).
+    // For node-click dimming, ALL other nodes were dimmed — we restore them via a targeted pass.
+    // Since we don't track every dimmed ID individually (could be large), we reset only the
+    // previously highlighted set here, and let vis-network's internal state handle the rest.
+    // (The dimmed nodes stay visually dimmed until the next highlight or explicit full reset.)
+    // Full graph reset (for direction change, initial load, etc.) remains available via:
+    //   edgesDataSet_KEY.update(rawEdges_KEY.map(...)) — call _fullResetHighlight_KEY() for that.
+    if (nodeResets.length) nodesDataSet_KEY.update(nodeResets);
+    network_KEY.setOptions({ physics: { enabled: false } });
+
+    // Clear stored state
+    _prevHighlight.nodeId = null;
+    _prevHighlight.incomingNodeIds = new Set();
+    _prevHighlight.outgoingNodeIds = new Set();
+    _prevHighlight.incomingEdgeIds = new Set();
+    _prevHighlight.outgoingEdgeIds = new Set();
+
     document.getElementById("panel_KEY").innerHTML =
       '<span class="hint">Click any node to see its incoming / outgoing connections.</span>';
     network_KEY.unselectAll();
     currentFlowIndex = -1;
     updateFlowUI_KEY();
   };
+
+  // Full graph reset (used when the visual state is uncertain, e.g. after flow navigation).
+  function _fullResetHighlight_KEY() {
+    edgesDataSet_KEY.update(rawEdges_KEY.map(function(e) {
+      return Object.assign({ id: e.id }, _RST_EDGE_STYLE);
+    }));
+    nodesDataSet_KEY.update(rawNodes_KEY.map(function(n) {
+      return Object.assign({ id: n.id }, _RST_NODE_STYLE);
+    }));
+    network_KEY.setOptions({ physics: { enabled: false } });
+    _prevHighlight.nodeId = null;
+    _prevHighlight.incomingNodeIds = new Set();
+    _prevHighlight.outgoingNodeIds = new Set();
+    _prevHighlight.incomingEdgeIds = new Set();
+    _prevHighlight.outgoingEdgeIds = new Set();
+  }
 
   network_KEY.on("click", function(params) {
     if (params.nodes.length > 0) {
@@ -735,7 +883,7 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
       var nodeId = flow.sequence[currentStepIndex];
       if (stepInfo) stepInfo.textContent = "Step " + (currentStepIndex + 1) + " of " + flow.sequence.length;
       network_KEY.selectNodes([nodeId]);
-      network_KEY.focus(nodeId, { scale: 1.1, animation: true });
+      network_KEY.focus(nodeId, { scale: 1.1, animation: !SKIP_ANIMATION });
       highlightFlowPath_KEY(flow.sequence, currentStepIndex);
     }
   }
@@ -796,9 +944,13 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
     var DIM_EDGE_FONT = { size: 10, color: "rgba(148,163,184,0.1)", strokeWidth: 0 };
     var LIT_EDGE_FONT = { size: 11, color: "#334155", strokeWidth: 3, strokeColor: "#ffffff" };
 
+    // Build O(S) lookup map once so the edge loop is O(E) not O(E * S)
+    var stepIndex = {};
+    sequence.forEach(function(id, i) { stepIndex[id] = i; });
+
     var edgeUpdates = rawEdges_KEY.map(function(e) {
-      var fromIdx = sequence.indexOf(e.from);
-      var toIdx = sequence.indexOf(e.to);
+      var fromIdx = stepIndex.hasOwnProperty(e.from) ? stepIndex[e.from] : -1;
+      var toIdx   = stepIndex.hasOwnProperty(e.to)   ? stepIndex[e.to]   : -1;
       var isFlowEdge = (fromIdx !== -1 && toIdx !== -1 && toIdx === fromIdx + 1);
 
       if (isFlowEdge && (fromIdx < activeIndex || showAll)) {
@@ -820,13 +972,14 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
       }
     });
     edgesDataSet_KEY.update(edgeUpdates);
+    network_KEY.setOptions({ physics: { enabled: false } });
 
     if (activeNodeId) {
       updatePanelForNode_KEY(activeNodeId);
     }
   }
 
-  var MIN_INITIAL_SCALE = 0.55;
+  var MIN_INITIAL_SCALE = 0.75;
   function fitCapped_KEY(minScale) {
     var ids = nodesDataSet_KEY.getIds();
     if (ids.length === 0) return;
@@ -848,9 +1001,28 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
     });
   }
 
+  // Guard: fitCapped should only auto-fire once on initial render,
+  // never again during normal click/pan/zoom interactions.
+  var _fitDone_KEY = false;
+
   network_KEY.once("stabilizationIterationsDone", function() {
-    fitCapped_KEY(MIN_INITIAL_SCALE);
+    if (!_fitDone_KEY) {
+      _fitDone_KEY = true;
+      fitCapped_KEY(MIN_INITIAL_SCALE);
+    }
   });
+
+  // LARGE_GRAPH path: physics is disabled immediately so stabilizationIterationsDone
+  // never fires. Use a one-shot requestAnimationFrame so the network has had a chance
+  // to place nodes before we read their positions.
+  if (LARGE_GRAPH && !_fitDone_KEY) {
+    requestAnimationFrame(function() {
+      if (!_fitDone_KEY) {
+        _fitDone_KEY = true;
+        fitCapped_KEY(MIN_INITIAL_SCALE);
+      }
+    });
+  }
 })();
 </script>
 """

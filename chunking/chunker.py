@@ -1,20 +1,8 @@
 """
-Smart Auto-Detecting Chunker
+chunking/chunker.py
 
-Supports multiple document types:
-  - Functional Requirements   (FR-001, REQ-001, F-001)
-  - Non-Functional Requirements (NFR-001, NR-001)
-  - Business Rules            (BR-001, BRD-001)
-  - Test Cases                (TC-001, TEST-001, TS-001)
-  - User Stories              (US-001, Story 1, User Story 1)
-  - Use Cases                 (UC-001, USE-001)
-  - Generic numbered sections (1.1, 2.3 etc.)
-
-Flow:
-  1. Detect document type from content
-  2. Try pattern-based chunking for that type
-  3. If no patterns found → LangChain semantic fallback
-  4. If chunks too long → LangChain splits further
+Auto-detecting structural and semantic text chunker for requirement items,
+user stories, test cases, and generic document sections.
 """
 
 import re

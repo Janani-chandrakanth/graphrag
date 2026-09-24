@@ -1,76 +1,19 @@
 """
-Graph Test Case Generator
+graph/graph_test_case_generator.py
 
-Pipeline position: consumes the SAME nodes/relationships session_state
-already holds after Build Index — post Confidence Scorer + Graph
-Validator, the exact objects the "Graph Quality Report" section
-renders — plus parser/requirement_linker.py's items_with_links (only
-for series grouping/ordering, via graph/structural_linker.py's
-_series_key, the same "which items form one continuing flow" grouping
-graph/test_case_generator.py's Gherkin generator already uses).
-
-Different from graph/test_case_generator.py (Gherkin): that generator
-never touches the knowledge graph at all — its Given/When/Then comes
-from requirement text and item-level links only. This one walks the
-ACTUAL extracted entity graph (Actor/Feature/Screen/UIElement/
-DataObject/... nodes connected by USES/TRIGGERS/GENERATES/... edges)
-to build a real step-by-step scenario, in a fielded test-case format
-(TC-ID / REQ-ID / TITLE / TYPE / PRIORITY / ACTOR / FEATURE /
-PRECONDITION / STEPS / EXPECTED RESULT / GRAPH NODES) rather than
-Given/When/Then prose.
-
-Design (deterministic, no extra LLM call — matches this project's
-established rule-based-wherever-a-signal-exists pattern, same as
-parser/requirement_linker.py and graph/test_case_generator.py):
-
-1. Group requirement items into series (structural_linker._series_key —
-   e.g. all "FR_LOGIN" items, or all "GEN" items for a document with no
-   native ID scheme, are one continuing flow).
-
-2. For each item in a series, take its own extracted nodes
-   (node["source"] == item_id) and the edges between them, and find
-   that item's "local path": a greedy walk from a root (no incoming
-   edges within the item's own subgraph, preferring an Actor node) to a
-   leaf, preferring State/Output/Screen/Message-typed leaves as the
-   meaningful stopping point over an arbitrary dead end.
-
-3. Concatenate each item's local path across the whole series, in
-   document order, into ONE combined step sequence — this is the
-   "COMBINED" test case: one scenario walking the full flow the
-   document describes (e.g. the whole login journey), not one atomic
-   requirement in isolation. Matches the naming in the sample format
-   this was built from ("TC-COMBINED-001").
-
-4. Render each hop as one imperative STEP line, using the edge's
-   relationship type + target node's type bucket to pick a phrasing
-   template (Screen/UIElement -> "Navigate to X.", DataObject/Attribute
-   via USES/CREATES/UPDATES -> "Enter X.", Action -> "Click X." /
-   "Perform X.", ...) — a fixed lookup table, not free text generation.
-
-5. Classify TYPE (Positive/Negative) by scanning the series' own item
-   content + node names for a small, explicit set of negative-outcome
-   cue words (invalid, error, fail, incorrect, denied, ...).
-
-6. Derive ACTOR / FEATURE / PRECONDITION / EXPECTED RESULT / PRIORITY
-   from the same subgraph, each with a documented fallback when the
-   graph doesn't have that information explicit.
-
-Never-silently-disguise: every test case carries a "fallbacks" list
-naming which fields used a fallback instead of a genuine graph signal —
-same convention as parser/normalization_validator.py's review_queue,
-graph/validator.py's review_nodes/relationships, graph/confidence_scorer.py's
-low_confidence flags, and graph/test_case_generator.py's is_fallback.
-A scenario assembled from thin graph signal looks visibly weaker than
-one built from a rich, well-connected subgraph — not indistinguishable
-from it.
+Generates structured test cases (positive, negative, and combined flows)
+by traversing extracted entities and sequential relationships in the knowledge graph.
 """
 
+import hashlib
 import re
 from collections import defaultdict
+import logging
 
 from graph.flow_graph_analysis import FLOW_RELATIONS
 
 # NOTE: deliberately NOT importing _series_key from graph/structural_linker.py.
+logger = logging.getLogger(__name__)
 # That module is under active trimming on the project's end (its own
 # docstring documents removing the requirement backbone entirely) and
 # has already dropped this function once between versions seen during
@@ -208,7 +151,8 @@ def _build_item_subgraph(item_id: str, nodes: list, relationships: list) -> tupl
     in_degree = defaultdict(int)
 
     for rel in relationships:
-        if rel.get("source") != item_id:
+        rel_src = rel.get("source")
+        if rel_src and rel_src != item_id:
             continue
         f, t = rel.get("from"), rel.get("to")
         if f in item_nodes and t in item_nodes and f != t:
@@ -549,6 +493,161 @@ def generate_feature_driven_test_cases(nodes: list, relationships: list) -> list
     return feature_tcs
 
 
+# ── Variant and Precondition Helpers ─────────────────────────────────
+
+def _extract_step_target(step_str: str) -> str:
+    """Extract target screen, component, or action name from a step string."""
+    if not step_str:
+        return "initial step"
+    match = re.search(r'(?:navigate to|enter|click|select|perform|on|open|access)\s+([^.\n,]+)', str(step_str), re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return str(step_str).strip()
+
+
+def validate_and_align_precondition(tc: dict) -> tuple[dict, bool]:
+    """
+    Validates that tc['precondition'] shares at least one entity or meaningful token
+    with step 1 (or the step set/catalog).
+    If it does not overlap, re-derives precondition from step 1 target.
+    If re-derivation fails, flags tc for regeneration (precondition_mismatch=True).
+    """
+    precondition = str(tc.get("precondition") or "").strip()
+    steps = tc.get("steps") or []
+    if not steps:
+        return tc, True
+
+    step1 = str(steps[0])
+    noise = {"user", "system", "has", "the", "and", "for", "with", "is", "on", "in", "to", "a", "an", "of", "precondition", "prerequisite", "executed", "under"}
+    precond_tokens = {w.lower() for w in re.findall(r'[A-Za-z0-9]+', precondition) if len(w) >= 3 and w.lower() not in noise}
+    step1_tokens = {w.lower() for w in re.findall(r'[A-Za-z0-9]+', step1) if len(w) >= 3 and w.lower() not in noise}
+    graph_nodes = {str(n).lower() for n in (tc.get("graph_nodes") or tc.get("entities_used") or [])}
+
+    overlap = (precond_tokens & step1_tokens) or (precond_tokens & graph_nodes)
+    if overlap:
+        tc["precondition_aligned"] = True
+        return tc, True
+
+    # Re-derive precondition from step 1 target
+    target = _extract_step_target(step1)
+    tc["precondition"] = f"User is on {target} screen with valid session state."
+    
+    # Check if re-derived precondition has overlap
+    rederived_tokens = {w.lower() for w in re.findall(r'[A-Za-z0-9]+', tc["precondition"]) if len(w) >= 3 and w.lower() not in noise}
+    if rederived_tokens & step1_tokens:
+        tc["precondition_aligned"] = True
+        tc["precondition_rederived"] = True
+        return tc, True
+
+    # Regeneration flag if re-derivation failed
+    tc["precondition_aligned"] = False
+    tc["precondition_mismatch"] = True
+    return tc, False
+
+
+def _make_negative_variant(base_tc: dict) -> dict:
+    """Return a copy of *base_tc* where every INPUT‑type step is made invalid."""
+    tc = base_tc.copy()
+    tc["type"] = "Negative"
+    tc["tc_id"] = f"{base_tc['tc_id']}-NEG"
+    tc["title"] = f"Negative - {tc.get('feature', '')} with invalid inputs"
+    tc["description"] = f"Verifies that invalid input entries for {tc.get('feature', '')} are rejected with clear error feedback."
+    first_step = tc["steps"][0] if tc.get("steps") else tc.get("feature", "")
+    tc["precondition"] = f"User is at {_extract_step_target(first_step)} with invalid input parameters."
+    new_steps = []
+    for step in tc["steps"]:
+        if step.startswith("Enter "):
+            new_steps.append(re.sub(r"Enter (.+?)\.", r"Enter invalid \1.", step))
+        else:
+            new_steps.append(step)
+    tc["steps"] = new_steps
+    tc["fallbacks"] = list(tc.get("fallbacks", [])) + ["generated negative‑input variant"]
+    validate_and_align_precondition(tc)
+    return tc
+
+
+def _make_dependency_variant(base_tc: dict) -> dict:
+    """Return a copy where the initial step (often a prerequisite) is omitted."""
+    if not base_tc.get("steps"):
+        return None
+    tc = base_tc.copy()
+    tc["type"] = "Negative"
+    tc["tc_id"] = f"{base_tc['tc_id']}-DEP"
+    tc["title"] = f"Negative - Missing prerequisite step for {tc.get('feature', '')}"
+    tc["description"] = f"Verifies that performing {tc.get('feature', '')} without completing prerequisite steps fails gracefully."
+    first_step = base_tc["steps"][0]
+    tc["precondition"] = f"Prerequisite step '{_extract_step_target(first_step)}' has been omitted."
+    tc["steps"] = base_tc["steps"][1:]
+    tc["expected_result"] = "Prerequisite step missing – operation should fail"
+    validate_and_align_precondition(tc)
+    return tc
+
+
+def _make_edge_variant(base_tc: dict) -> dict:
+    """Create a variant that simulates a navigation edge failure."""
+    tc = base_tc.copy()
+    tc["type"] = "Edge"
+    tc["tc_id"] = f"{base_tc['tc_id']}-EDGE"
+    tc["title"] = f"Edge - {tc.get('feature', '')} navigation boundary & latency"
+    tc["description"] = f"Verifies system resilience when navigation in {tc.get('feature', '')} experiences boundary latency or threshold limits."
+    tc["precondition"] = f"Navigation to {tc.get('feature', '')} is executed under upper latency threshold conditions."
+    new_steps = []
+    changed = False
+    for step in tc.get("steps", []):
+        if not changed and str(step).startswith("Navigate to "):
+            new_steps.append(re.sub(r"Navigate to (.+?)\.", r"Navigate to \1 under latency threshold.", step))
+            changed = True
+        else:
+            new_steps.append(step)
+    tc["steps"] = new_steps
+    tc["fallbacks"] = list(tc.get("fallbacks", [])) + ["generated edge‑variant"]
+    validate_and_align_precondition(tc)
+    return tc
+
+
+def _make_alternative_variant(base_tc: dict) -> dict:
+    """Create an alternative‑flow variant by swapping an action step."""
+    tc = base_tc.copy()
+    tc["tc_id"] = f"{base_tc['tc_id']}-ALT"
+    tc["title"] = f"Positive - Alternative interaction path for {tc.get('feature', '')}"
+    tc["description"] = f"Verifies an alternative valid interaction sequence to complete {tc.get('feature', '')}."
+    tc["precondition"] = f"User selects an alternative valid interaction route for {tc.get('feature', '')}."
+    new_steps = []
+    changed = False
+    for step in tc.get("steps", []):
+        if not changed and (str(step).startswith("Click ") or str(step).startswith("Perform ")):
+            if str(step).startswith("Click "):
+                new_steps.append(step.replace("Click ", "Tap / Select "))
+            else:
+                new_steps.append(step.replace("Perform ", "Execute alternate "))
+            changed = True
+        else:
+            new_steps.append(step)
+    tc["steps"] = new_steps
+    tc["fallbacks"] = list(tc.get("fallbacks", [])) + ["generated alternative‑variant"]
+    validate_and_align_precondition(tc)
+    return tc
+
+
+def _make_exception_variant(base_tc: dict) -> dict:
+    """Create a variant that inserts an exception step before the expected result."""
+    tc = base_tc.copy()
+    tc["type"] = "Negative"
+    tc["tc_id"] = f"{base_tc['tc_id']}-EXC"
+    tc["title"] = f"Negative - Exception recovery during {tc.get('feature', '')}"
+    tc["description"] = f"Verifies system exception handling and error recovery when an exception triggers during {tc.get('feature', '')}."
+    tc["precondition"] = f"System triggers an unexpected runtime exception during {tc.get('feature', '')} execution."
+    if tc.get("steps"):
+        exc_step = f"Trigger runtime exception during {tc.get('feature', '')}."
+        tc["steps"] = [tc["steps"][0], exc_step] + tc["steps"][1:]
+    else:
+        tc["steps"] = [f"Trigger runtime exception during {tc.get('feature', '')}."]
+    tc["expected_result"] = f"System catches exception in {tc.get('feature', '')}, logs error, and recovers state safely."
+    tc["fallbacks"] = list(tc.get("fallbacks", [])) + ["generated exception‑variant"]
+    validate_and_align_precondition(tc)
+    return tc
+
+
 def generate_test_cases_from_graph(
     nodes: list,
     relationships: list,
@@ -632,6 +731,7 @@ def generate_test_cases_from_graph(
 
     test_cases = []
     seq_by_series = defaultdict(int)
+    seen_tc_ids_graph: set = set()  # Issue 3: collision guard for deterministic path
 
     for sk in seen_series:
         series_items = by_series[sk]
@@ -780,20 +880,30 @@ def generate_test_cases_from_graph(
         if not combined_steps:
             fallbacks.append("steps (subgraph had nodes but no usable edges to walk — see graph_nodes for what was found instead)")
 
-        seq_by_series[sk] += 1
-        tc_num = seq_by_series[sk]
-        is_combined = len(series_items) > 1
-        tc_id = f"TC-COMBINED-{tc_num:03d}" if is_combined else f"TC-{series_items[0].get('id', sk)}-{tc_num:03d}"
-        req_id = series_items[0].get("id", sk)
-
         title = (
             f"{'Successful' if is_positive else 'Failed'} {feature_name} "
             f"with {'valid' if is_positive else 'invalid'} inputs"
         )
+        seq_by_series[sk] += 1
+        tc_num = seq_by_series[sk]
+        is_combined = len(series_items) > 1
+        # Issue 3: embed title hash for cross-series collision safety
+        title_hash = hashlib.sha256(title.encode()).hexdigest()[:4]
+        tc_id = (
+            f"TC-COMBINED-{tc_num:03d}-{title_hash}" if is_combined
+            else f"TC-{series_items[0].get('id', sk)}-{tc_num:03d}-{title_hash}"
+        )
+        if tc_id in seen_tc_ids_graph:
+            raise RuntimeError(
+                f"TC-ID collision in deterministic path: '{tc_id}'. "
+                f"Check series/title uniqueness."
+            )
+        seen_tc_ids_graph.add(tc_id)
+        req_id = series_items[0].get("id", sk)
 
         priority = _priority_for_series(series_items, links)
 
-        test_cases.append({
+        base_tc = {
             "tc_id": tc_id,
             "req_id": req_id,
             "title": title,
@@ -807,42 +917,9 @@ def generate_test_cases_from_graph(
             "graph_nodes": [n for n in combined_graph_nodes if n],
             "source_items": [i.get("id") for i in series_items],
             "fallbacks": fallbacks,
-        })
-
-    # Helper: create a negative‑input variant by marking each INPUT step as invalid
-    def _make_negative_variant(base_tc: dict) -> dict:
-        """Return a copy of *base_tc* where every INPUT‑type step is made invalid."""
-        tc = base_tc.copy()
-        tc["type"] = "Negative"
-        tc["tc_id"] = f"{base_tc['tc_id']}-NEG"
-        tc["title"] = f"Negative - {tc.get('feature', '')} with invalid inputs"
-        tc["description"] = f"Verifies that invalid input entries for {tc.get('feature', '')} are rejected with clear error feedback."
-        tc["precondition"] = f"User submits {tc.get('feature', '')} using invalid or malformed data."
-        new_steps = []
-        for step in tc["steps"]:
-            if step.startswith("Enter "):
-                new_steps.append(re.sub(r"Enter (.+?)\.", r"Enter invalid \1.", step))
-            else:
-                new_steps.append(step)
-        tc["steps"] = new_steps
-        tc["fallbacks"] = list(tc.get("fallbacks", [])) + ["generated negative‑input variant"]
-        return tc
-
-    # Helper: create a dependency‑missing variant by removing the first step (assumed prerequisite)
-    def _make_dependency_variant(base_tc: dict) -> dict:
-        """Return a copy where the initial step (often a prerequisite) is omitted."""
-        if not base_tc["steps"]:
-            return None
-        tc = base_tc.copy()
-        tc["type"] = "Negative"
-        tc["tc_id"] = f"{base_tc['tc_id']}-DEP"
-        tc["title"] = f"Negative - Missing prerequisite step for {tc.get('feature', '')}"
-        tc["description"] = f"Verifies that performing {tc.get('feature', '')} without completing prerequisite steps fails gracefully."
-        tc["precondition"] = f"Prerequisite initial step for {tc.get('feature', '')} has been omitted."
-        tc["steps"] = base_tc["steps"][1:]
-        tc["expected_result"] = "Prerequisite step missing – operation should fail"
-        return tc
-
+        }
+        validate_and_align_precondition(base_tc)
+        test_cases.append(base_tc)
 
     # Generate extra variants for each base test case
     extra_variants = []
@@ -912,77 +989,6 @@ def generate_test_cases_from_graph(
             "total_gap_steps": total_gap_steps,
         },
     }
-
-
-
-    # --------------------------------------------------------------------------
-
-# ── Additional Variant Helpers ────────────────────────────────────────
-# These helpers generate extra test case variants beyond the basic
-# negative‑input and dependency‑missing variants already present.
-# They are intentionally simple and deterministic, following the same
-# rule‑based style as the rest of the generator.
-
-def _make_edge_variant(base_tc: dict) -> dict:
-    """Create a variant that simulates a navigation edge failure."""
-    tc = base_tc.copy()
-    tc["type"] = "Edge"
-    tc["tc_id"] = f"{base_tc['tc_id']}-EDGE"
-    tc["title"] = f"Edge - {tc.get('feature', '')} navigation boundary & latency"
-    tc["description"] = f"Verifies system resilience when navigation in {tc.get('feature', '')} experiences boundary latency or threshold limits."
-    tc["precondition"] = f"Navigation to {tc.get('feature', '')} is executed under upper latency threshold conditions."
-    new_steps = []
-    changed = False
-    for step in tc["steps"]:
-        if not changed and str(step).startswith("Navigate to "):
-            new_steps.append(re.sub(r"Navigate to (.+?)\.", r"Navigate to \1 under latency threshold.", step))
-            changed = True
-        else:
-            new_steps.append(step)
-    tc["steps"] = new_steps
-    tc["fallbacks"] = list(tc.get("fallbacks", [])) + ["generated edge‑variant"]
-    return tc
-
-
-def _make_alternative_variant(base_tc: dict) -> dict:
-    """Create an alternative‑flow variant by swapping an action step."""
-    tc = base_tc.copy()
-    tc["tc_id"] = f"{base_tc['tc_id']}-ALT"
-    tc["title"] = f"Positive - Alternative interaction path for {tc.get('feature', '')}"
-    tc["description"] = f"Verifies an alternative valid interaction sequence to complete {tc.get('feature', '')}."
-    tc["precondition"] = f"User selects an alternative valid interaction route for {tc.get('feature', '')}."
-    new_steps = []
-    changed = False
-    for step in tc["steps"]:
-        if not changed and (str(step).startswith("Click ") or str(step).startswith("Perform ")):
-            if str(step).startswith("Click "):
-                new_steps.append(step.replace("Click ", "Tap / Select "))
-            else:
-                new_steps.append(step.replace("Perform ", "Execute alternate "))
-            changed = True
-        else:
-            new_steps.append(step)
-    tc["steps"] = new_steps
-    tc["fallbacks"] = list(tc.get("fallbacks", [])) + ["generated alternative‑variant"]
-    return tc
-
-
-def _make_exception_variant(base_tc: dict) -> dict:
-    """Create a variant that inserts an exception step before the expected result."""
-    tc = base_tc.copy()
-    tc["type"] = "Negative"
-    tc["tc_id"] = f"{base_tc['tc_id']}-EXC"
-    tc["title"] = f"Negative - Exception recovery during {tc.get('feature', '')}"
-    tc["description"] = f"Verifies system exception handling and error recovery when an exception triggers during {tc.get('feature', '')}."
-    tc["precondition"] = f"System triggers an unexpected runtime exception during {tc.get('feature', '')} execution."
-    if tc["steps"]:
-        exc_step = f"Trigger runtime exception during {tc.get('feature', '')}."
-        tc["steps"] = [tc["steps"][0], exc_step] + tc["steps"][1:]
-    else:
-        tc["steps"] = [f"Trigger runtime exception during {tc.get('feature', '')}."]
-    tc["expected_result"] = f"System catches exception in {tc.get('feature', '')}, logs error, and recovers state safely."
-    tc["fallbacks"] = list(tc.get("fallbacks", [])) + ["generated exception‑variant"]
-    return tc
 
 
 def _render_test_case_text(tc: dict) -> str:

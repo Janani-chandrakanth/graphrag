@@ -1,49 +1,8 @@
 """
 graph/feature_extractor.py
-Phase 2 of the Feature Flow Enhancement.
 
-Takes the source Knowledge Graph + the semantic classification output
-from Phase 1 (graph/semantic_classifier.py) and produces structured
-Feature Models — one per meaningful business feature.
-
-Design decisions:
-  - Connected components of workflow nodes are CANDIDATE features only.
-  - LLM (one batched call) assigns meaningful names/descriptions and
-    identifies actor, entry point, branches, end states, etc.
-  - Workflow sequence is preserved using DFS topological ordering from
-    the identified entry point.
-  - Cyclic paths are detected and represented as loops (not flattened).
-  - Supporting context (1-hop neighbours of each workflow step) is
-    attached separately so it remains available to test generation and
-    evaluation without polluting the primary workflow view.
-  - Results are cached — keyed by the classifier cache key + extractor
-    version so LLM is never called again unless the graph changes.
-  - No LLM call occurs during feature *selection* in the UI.
-
-Feature Model shape (matches the spec in the implementation plan):
-    {
-        "feature_id":             str,
-        "name":                   str,
-        "description":            str,
-        "actors":                 [str, ...],
-        "entry_point_id":         str | None,
-        "ordered_steps":          [str, ...],   # node names, in walk order
-        "step_node_ids":          [str, ...],   # node IDs, same order
-        "workflow_edge_ids":      [(from,to,type), ...],
-        "transitions":            [{from,to,type}, ...],
-        "decision_node_ids":      [str, ...],
-        "branches":               [{from, to_list}, ...],
-        "end_state_ids":          [str, ...],
-        "supporting_node_ids":    [str, ...],
-        "supporting_edge_ids":    [(from,to,type), ...],
-        "business_rule_ids":      [str, ...],
-        "requirement_ids":        [str, ...],
-        "alternate_paths":        [...],
-        "negative_paths":         [...],
-        "failure_recovery_paths": [...],
-        "source_evidence":        [...],
-        "confidence":             float,
-    }
+Extracts structured business feature models from graph data and semantic
+classifications, establishing ordered steps, entry points, branches, and supporting context.
 """
 
 import json
@@ -52,6 +11,7 @@ import logging
 from collections import defaultdict, deque
 from typing import Dict, List, Any, Optional, Set, Tuple
 
+from graph.flow_graph_analysis import FLOW_RELATIONS
 from graph.semantic_classifier import (
     classify_graph,
     build_classification_cache_key,
@@ -656,6 +616,14 @@ Example:
 # Supporting Context Collector
 # =============================================================================
 
+
+# Issue 4: Supporting context attachment excludes flow transitions and DEPENDS_ON.
+# Structural, semantic, and metadata relation edges (USES, SUPPORTS, PART_OF, REALIZES, CONSTRAINS, TRACKS, etc.) are included.
+_EXCLUDED_SUPPORT_EDGE_TYPES: frozenset = frozenset(
+    set(FLOW_RELATIONS) | {"DEPENDS_ON", "NEXT_IN_DOCUMENT"}
+)
+
+
 def _collect_supporting_context(
     step_node_ids: List[str],
     node_by_id:    Dict[str, Dict],
@@ -665,29 +633,34 @@ def _collect_supporting_context(
     hops:          int = 1,
 ) -> Dict[str, Any]:
     """
-    Collect non-workflow neighbours of the feature's workflow steps.
+    Collect non-workflow neighbours of the feature's workflow steps, reachable
+    only via non-procedural edges (excluding FLOW_RELATIONS and DEPENDS_ON).
+
     Returns node/edge IDs for supporting context, business rules, and requirements.
     """
     step_set = set(step_node_ids)
-    support_node_ids:    Set[str] = set()
-    support_edge_ids:    List[Tuple] = []
-    business_rule_ids:   Set[str] = set()
-    requirement_ids:     Set[str] = set()
+    support_node_ids:  Set[str] = set()
+    support_edge_ids:  List[Tuple] = []
+    business_rule_ids: Set[str] = set()
+    requirement_ids:   Set[str] = set()
 
-    # Build adjacency over all edges (not just flow transitions)
-    all_adj: Dict[str, List[Tuple[str, str, str]]] = defaultdict(list)
+    # Build adjacency restricted to non-flow, non-DEPENDS_ON edge types
+    structural_adj: Dict[str, List[Tuple[str, str, str]]] = defaultdict(list)
     for rel in relationships:
-        frm  = rel.get("from", "")
-        to   = rel.get("to", "")
         rtype = rel.get("type", "")
-        all_adj[frm].append((to, frm, rtype))
-        all_adj[to].append((frm, frm, rtype))  # undirected
+        if rtype in _EXCLUDED_SUPPORT_EDGE_TYPES:
+            continue
+        frm = rel.get("from", "")
+        to  = rel.get("to", "")
+        if frm and to:
+            structural_adj[frm].append((to, frm, rtype))
+            structural_adj[to].append((frm, frm, rtype))   # undirected walk
 
     frontier = set(step_node_ids)
     for _ in range(hops):
         next_frontier: Set[str] = set()
         for nid in frontier:
-            for (nb, orig_from, rtype) in all_adj.get(nid, []):
+            for (nb, orig_from, rtype) in structural_adj.get(nid, []):
                 if nb in step_set or nb in support_node_ids or nb in frontier:
                     continue
                 role = node_cls.get(nb, {}).get("role", "other")
@@ -704,11 +677,12 @@ def _collect_supporting_context(
         frontier = next_frontier
 
     return {
-        "node_ids":         list(support_node_ids),
-        "edge_ids":         support_edge_ids,
-        "business_rule_ids":list(business_rule_ids),
-        "requirement_ids":  list(requirement_ids),
+        "node_ids":          list(support_node_ids),
+        "edge_ids":          support_edge_ids,
+        "business_rule_ids": list(business_rule_ids),
+        "requirement_ids":   list(requirement_ids),
     }
+
 
 
 # =============================================================================

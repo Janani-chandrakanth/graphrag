@@ -1,10 +1,16 @@
 
+import hashlib
 import json
 from collections import defaultdict
 
 from parser.llm_client import call_ollama, extract_json_block
 from prompts.prompt_library import get_prompt as _get_library_prompt
-from graph.graph_test_case_generator import generate_test_cases_from_graph, _render_test_case_text
+from graph.graph_test_case_generator import (
+    generate_test_cases_from_graph,
+    _render_test_case_text,
+    validate_and_align_precondition,
+)
+
 from graph.negative_scenario_generator import _catalog_for_series
 from graph.neo4j_manager import get_neighbor_nodes_db
 from embeddings.embedding_model import generate_embedding
@@ -235,21 +241,66 @@ def generate_hybrid_test_cases(
 
     active_template = _resolve_prompt_template(prompt_name)
 
+    # ── Pre-flight LLM reachability check ────────────────────────────────────
+    # A single fast probe (3s connect timeout) so we don't sit through 100+
+    # per-skeleton timeouts when the remote LLM server is offline.
+    import requests as _requests
+    from config import OLLAMA_URL as _OLLAMA_URL
+    _llm_available = False
+    _probe_urls = list(dict.fromkeys([_OLLAMA_URL, "http://localhost:11434"]))
+    for _purl in _probe_urls:
+        try:
+            _pr = _requests.get(f"{_purl}/api/tags", timeout=3)
+            if _pr.status_code == 200:
+                _llm_available = True
+                break
+        except Exception:
+            pass
+
+    if not _llm_available:
+        _all_tcs = skeleton_result.get("test_cases", [])
+        _text = "\n\n".join(
+            tc.get("steps", [""])[0] for tc in _all_tcs if isinstance(tc, dict)
+        )
+        return {
+            "test_cases": [{**tc, "llm_derived": False} for tc in _all_tcs],
+            "text": skeleton_result.get("text", ""),
+            "warnings": [
+                "LLM server is unreachable — returned graph-only test cases without hybrid enrichment. "
+                "Start Ollama locally or ensure the remote server is reachable to enable LLM refinement."
+            ],
+            "summary": {
+                "total_test_cases": len(_all_tcs),
+                "positive": sum(1 for tc in _all_tcs if tc.get("type") == "Positive"),
+                "negative": sum(1 for tc in _all_tcs if tc.get("type") == "Negative"),
+                "edge": sum(1 for tc in _all_tcs if tc.get("type") == "Edge"),
+                "llm_derived": 0,
+                "graph_only_fallback": len(_all_tcs),
+            },
+            "prompt_used": prompt_name,
+        }
+    # ─────────────────────────────────────────────────────────────────────────
+
     test_cases = []
     warnings = []
     seq_by_req = defaultdict(int)
-    seen_tc_keys = set()
+    seen_tc_keys = set()   # (req_id, type, title_lower, steps_hash) — scenario dedup
+    seen_tc_ids: set = set()   # final TC-ID strings — collision guard (Issue 3)
 
     for skeleton in skeleton_result["test_cases"]:
+        tc_id = skeleton.get("tc_id", "")
+        is_variant = any(tc_id.endswith(suffix) for suffix in ("-NEG", "-DEP", "-EDGE", "-ALT", "-EXC")) or tc_id.startswith("TC-FEAT-")
+        
         req_ids = skeleton.get("source_items", [skeleton.get("req_id", "")])
         local_catalog_text, local_valid_tokens = _catalog_for_series(req_ids, nodes)
         local_node_ids = [n["id"] for n in nodes if n.get("source") in req_ids]
 
-        if not local_catalog_text.strip():
-            warnings.append(
-                f"{skeleton.get('req_id')}: no entity catalog available — "
-                f"kept the graph-only draft as-is (no hybrid refinement)."
-            )
+        if is_variant or not local_catalog_text.strip():
+            if not is_variant and not local_catalog_text.strip():
+                warnings.append(
+                    f"{skeleton.get('req_id')}: no entity catalog available — "
+                    f"kept the graph-only draft as-is (no hybrid refinement)."
+                )
             test_cases.append({**skeleton, "llm_derived": False})
             continue
 
@@ -341,12 +392,23 @@ def generate_hybrid_test_cases(
             seq_by_req[skeleton.get("req_id")] = tc_num
             req_id = skeleton.get("req_id")
             is_combined = len(req_ids) > 1
+            # Issue 3: add 4-char title hash so TC-IDs are unique across requirement series
+            title_hash = hashlib.sha256(title.encode()).hexdigest()[:4]
             tc_id = (
-                f"TC-COMBINED-{req_id}-HYB-{tc_num:03d}" if is_combined
-                else f"TC-{req_id}-HYB-{tc_num:03d}"
+                f"TC-COMBINED-{req_id}-HYB-{tc_num:03d}-{title_hash}" if is_combined
+                else f"TC-{req_id}-HYB-{tc_num:03d}-{title_hash}"
             )
+            # Issue 3: fail the batch on a true TC-ID collision (pipeline invariant violated)
+            if tc_id in seen_tc_ids:
+                raise RuntimeError(
+                    f"TC-ID collision detected: '{tc_id}' was already generated in this batch. "
+                    f"This is a pipeline invariant violation — check req_id/title uniqueness."
+                )
+            seen_tc_ids.add(tc_id)
 
-            test_cases.append({
+            # Validate and possibly re‑derive the precondition
+            from graph.graph_test_case_generator import validate_and_align_precondition
+            tc_candidate = {
                 "tc_id": tc_id,
                 "req_id": req_id,
                 "title": title,
@@ -364,7 +426,14 @@ def generate_hybrid_test_cases(
                 "graph_context": {"local": local_used, "neighbor": neighbor_used},
                 "vector_context_used": vector_chunks_used,
                 "grounding_evidence": f"Requirement Series: {req_id} | Graph Nodes: {len(entities_used)}"
-            })
+            }
+            tc_aligned, ok = validate_and_align_precondition(tc_candidate)
+            if ok:
+                test_cases.append(tc_aligned)
+            else:
+                warnings.append(f"{req_id}: precondition mismatch after LLM generation — kept graph‑only draft.")
+                # Do not add this case; fallback will be added later
+
             kept_any = True
 
         if not kept_any:

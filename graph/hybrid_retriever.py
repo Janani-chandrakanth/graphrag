@@ -1,35 +1,8 @@
 """
-Hybrid Retriever
+graph/hybrid_retriever.py
 
-Closes gap #2 from the architecture review: graph/query_engine.py is
-named a "GraphRAG" pipeline but only ever did ONE retrieval mode —
-semantic search over LLM-written community summary TEXT
-(vectorstore/chroma_manager.search_community_summaries). It never
-actually walked the live graph. That means:
-
-  - Answers are only as fresh as the last time community summaries
-    were regenerated (graph/community_summarizer.py) — if the graph
-    changed since (e.g. new documents, or Test Case nodes written by
-    graph/test_case_writer.py) and summaries weren't rebuilt, the
-    answer is grounded in stale text, not the actual current graph.
-  - A summary is a lossy compression of a community's nodes/edges —
-    fine for "what is this area about", weak for "what EXACTLY
-    connects to X", which is precisely what the proposal's "Graph
-    Traversal: Pulls all related Flow Steps and Business Rules
-    connected to that feature" step needs.
-
-This module adds the second half of hybrid search WITHOUT touching the
-first: same semantic step as before (unchanged,
-graph/query_engine.retrieve_relevant_summaries), PLUS a live Cypher
-pull of each matched community's actual current nodes/relationships —
-reusing graph/neo4j_manager.get_community_nodes_db /
-get_community_relationships_db, which already existed but were never
-wired into the query pipeline itself, only into the Phase 2 UI's
-manual community browser.
-
-Both retrieval modes' output get combined into ONE prompt so the LLM
-answers from live graph facts AND the human-written summary framing,
-not either alone.
+Combines semantic community summary retrieval with live Cypher graph traversals
+to deliver hybrid context for knowledge graph question answering.
 """
 
 from graph.neo4j_manager import get_community_nodes_db, get_community_relationships_db

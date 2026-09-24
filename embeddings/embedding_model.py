@@ -8,6 +8,7 @@ the host that's actually reachable, with no vector-space change and
 no new dependency.
 """
 
+import json
 import requests
 from config import OLLAMA_EMBED_URL, EMBED_MODEL
 

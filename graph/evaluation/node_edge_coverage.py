@@ -10,6 +10,7 @@ import re
 from typing import List, Dict, Any, Optional, Set
 
 from graph.evaluation.evaluation_contract import build_evaluation_contract
+from graph.flow_graph_analysis import FLOW_RELATIONS
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,22 @@ def evaluate_node_edge_coverage(
 
     # 7. Informational: Full Graph Context Coverage (all source nodes except artifacts)
     full_graph_cov = evaluate_node_list(contract.get("all_source_nodes", graph_nodes))
-    
+
+    # Issue 4: Procedural Node Coverage — only nodes that appear as endpoints
+    # of at least one FLOW_RELATIONS edge. This is the coverage metric most
+    # directly aligned with sequential-flow test adequacy.
+    flow_node_ids: Set[str] = set()
+    for rel in graph_rels:
+        if rel.get("type") in FLOW_RELATIONS:
+            src = rel.get("from") or rel.get("source") or ""
+            tgt = rel.get("to") or rel.get("target") or ""
+            if src:
+                flow_node_ids.add(str(src))
+            if tgt:
+                flow_node_ids.add(str(tgt))
+    procedural_nodes = [n for n in graph_nodes if str(n.get("id", "")) in flow_node_ids]
+    procedural_cov = evaluate_node_list(procedural_nodes)
+
     # 8. Workflow Transition Coverage (only workflow_transition edges)
     workflow_transitions = contract.get("workflow_transitions", [])
     covered_edges = []
@@ -199,25 +215,31 @@ def evaluate_node_edge_coverage(
         "workflow_node_total": workflow_cov["total"],
         "workflow_node_covered": workflow_cov["covered"],
         "workflow_node_missed": workflow_cov["missed_items"],
-        
+
         "edge_coverage_pct": edge_pct,
         "total_workflow_edges": len(workflow_transitions),
         "covered_edge_count": len(covered_edges),
         "missed_edge_count": len(missed_edges),
         "covered_edges": covered_edges,
         "missed_edges": missed_edges,
-        
+
         # Dimensions
         "requirement_coverage_pct": req_cov["pct"],
         "business_rule_coverage_pct": br_cov["pct"],
         "input_coverage_pct": input_cov["pct"],
-        
+
+        # Issue 4: Procedural (FLOW edges) vs Full Graph — reported separately
+        "procedural_node_coverage_pct": procedural_cov["pct"],
+        "procedural_node_total": procedural_cov["total"],
+        "procedural_node_covered": procedural_cov["covered"],
+        "procedural_node_missed_items": procedural_cov["missed_items"],
+
         # Legacy/Informational
-        "node_coverage_pct": full_graph_cov["pct"],  # Now refers to "Source Graph Context Coverage"
+        "node_coverage_pct": full_graph_cov["pct"],  # Full Graph Context Coverage
         "total_nodes": full_graph_cov["total"],
         "covered_node_count": full_graph_cov["covered"],
         "missed_node_count": full_graph_cov["missed"],
         "missed_nodes": full_graph_cov["missed_items"],
-        
+
         "contract": contract
     }
