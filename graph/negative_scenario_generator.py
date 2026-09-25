@@ -113,9 +113,9 @@ def generate_negative_scenarios(
             coder model; this is a reasoning task on already-clean
             structured data, not whole-document reformatting.
         prompt_name: which prompts/prompt_library.py style to use
-            ("edge_case_focused" default, "gherkin_style",
-            "regression_suite", or any custom saved template). Falls
-            back to the original fixed prompt if the name isn't found.
+            ("edge_case_focused" default, "regression_suite",
+            or any custom saved template). Falls back to the original fixed
+            prompt if the name isn't found.
 
     Returns:
         {

@@ -1,8 +1,6 @@
 import streamlit as st
 from graph.neo4j_manager import get_all_nodes, get_all_relationships
 from graph.hybrid_test_case_generator import generate_hybrid_test_cases
-from graph.graph_test_case_generator import generate_test_cases_from_graph, _render_test_case_text
-from graph.gherkin_test_case_generator import generate_bdd_test_suite
 from graph.test_case_writer import write_test_cases_to_graph
 
 def render_test_case_generation_section():
@@ -24,7 +22,6 @@ def render_test_case_generation_section():
     with col1:
         st.markdown("**Generation Strategy**")
         st.markdown("Hybrid (LLM + Vector + Graph)")
-        engine_mode = "Hybrid (LLM + Vector + Graph)"
     with col2:
         st.write("")
         st.write("")
@@ -61,16 +58,11 @@ def render_test_case_generation_section():
                     except Exception:
                         chunks = []
 
-                if engine_mode == "Hybrid (LLM + Vector + Graph)":
-                    tc_results = generate_hybrid_test_cases(
-                        nodes=all_graph_nodes, relationships=rels,
-                        items_with_links=items_with_links,
-                        links=links, chunks=chunks,
-                    )
-                elif engine_mode == "Graph-Only Deterministic":
-                    tc_results = generate_test_cases_from_graph(all_graph_nodes, rels, items_with_links, links)
-                else: # BDD Gherkin
-                    tc_results = generate_bdd_test_suite(all_graph_nodes, rels)
+                tc_results = generate_hybrid_test_cases(
+                    nodes=all_graph_nodes, relationships=rels,
+                    items_with_links=items_with_links,
+                    links=links, chunks=chunks,
+                )
 
                 st.session_state["generated_test_cases_result"] = tc_results
                 # Also store under the key the evaluation tab expects
@@ -158,5 +150,4 @@ GRAPH NODES     : {nodes_str}
                     except Exception as write_err:
                         st.error(f"Failed to persist test cases: {write_err}")
 
-        elif res.get("gherkin_suite"):
-            st.code(res["gherkin_suite"], language="gherkin")
+

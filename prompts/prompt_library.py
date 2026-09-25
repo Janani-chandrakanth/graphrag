@@ -59,25 +59,6 @@ Return ONLY a JSON array, no other text, no markdown fences. Each entry:
 {{"title": "<short scenario title>", "steps": ["<step 1>", "<step 2>", "..."], "expected_result": "<expected outcome>", "entities_used": ["<exact name from catalog>", "..."]}}
 """
 
-_GHERKIN_STYLE = """You are a QA engineer writing Gherkin-style (Given/When/Then) NEGATIVE and EDGE-CASE scenarios for one part of a system, based ONLY on entities already extracted from its requirements.
-
-REQUIREMENT SERIES: {req_ids}
-
-POSITIVE TEST CASE ALREADY BUILT FOR THIS SERIES:
-  Actor: {actor}
-  Feature: {feature}
-  Steps: {steps}
-  Expected Result: {expected_result}
-
-ENTITIES YOU MAY REFERENCE (id | type | name) — you may ONLY use entities from this list. Do NOT invent, assume, or reference anything not in this list. No external systems, no generic infrastructure ("the database", "the network", "the API") unless it is literally in the list below:
-{catalog}
-
-Propose 1 to 3 realistic NEGATIVE or EDGE-CASE scenarios, each expressed as Given/When/Then steps (e.g. "Given the {actor} is on the Login screen", "When an invalid password is submitted", "Then an error message is displayed") instead of plain imperative steps — grounded ENTIRELY in the entities listed. Every entity name in "entities_used" must be copied EXACTLY as it appears in the catalog above. If you cannot construct a grounded scenario from this list, return an empty array.
-
-Return ONLY a JSON array, no other text, no markdown fences. Each entry:
-{{"title": "<short scenario title>", "steps": ["Given ...", "When ...", "Then ..."], "expected_result": "<expected outcome>", "entities_used": ["<exact name from catalog>", "..."]}}
-"""
-
 _REGRESSION_SUITE = """You are a QA engineer building REGRESSION-focused NEGATIVE and EDGE-CASE scenarios for one part of a system, based ONLY on entities already extracted from its requirements. Regression framing: assume this flow worked correctly in a prior release — scenarios should target the specific entities/states most likely to break silently after a future change (boundary values, previously-fixed edge conditions, state transitions), not novel/exotic failures.
 
 REQUIREMENT SERIES: {req_ids}
@@ -142,7 +123,6 @@ def _seed_defaults() -> dict:
 
     return {
         "edge_case_focused": entry("Edge Case Focused (default)", _EDGE_CASE_FOCUSED),
-        "gherkin_style": entry("Gherkin Style", _GHERKIN_STYLE),
         "regression_suite": entry("Regression Suite", _REGRESSION_SUITE),
         "hybrid_flow": entry("Hybrid Vector+Graph Flow (default)", _HYBRID_FLOW, category="hybrid_test_cases"),
     }
