@@ -1,8 +1,8 @@
 import json
 from typing import List, Dict, Optional
 
-from .models import WorkflowModel, Feature, Step
-from .sequence_extractor import extract_workflow_sequence
+from .schemas import WorkflowModel, Feature, Step
+from .entity_extractor import extract_workflow_sequence
 
 
 def extract_workflow(document_text: str) -> WorkflowModel:

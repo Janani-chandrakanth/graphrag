@@ -10,10 +10,13 @@ import streamlit as st
 from typing import Dict, Any, List
 
 from graph.neo4j_manager import get_all_nodes, get_all_relationships
-from graph.evaluation.test_case_evaluator import get_test_case_evaluation_history
-from graph.evaluation.test_case_preprocess import preprocess_test_cases
-from graph.evaluation.llm_bridge import invoke_llm_for_judgment
-from graph.evaluation.metric_aggregator import aggregate_metrics
+from graph.evaluation.test_case_evaluation_engine import (
+    get_test_case_evaluation_history,
+    invoke_llm_for_judgment,
+    aggregate_metrics,
+    evaluate_test_cases_legacy,
+)
+from graph.evaluation.test_case_contracts import preprocess_test_cases, build_evaluation_contract
 
 
 def render_test_case_evaluation_tab():
@@ -79,7 +82,7 @@ def render_test_case_evaluation_tab():
             if not test_cases:
                 from graph.neo4j_manager import run_read_query
                 records = run_read_query("MATCH (tc:Entity {type: 'TestCase'}) RETURN tc")
-                test_cases = [r["tc"] for r in records if "tc" in r]
+                test_cases = [dict(r["tc"]) if hasattr(r["tc"], "items") else r["tc"] for r in records if "tc" in r]
 
             if not test_cases:
                 st.info("No test cases found to evaluate. Generate test cases first in the Build Graph or Query tab.")
@@ -92,7 +95,8 @@ def render_test_case_evaluation_tab():
             if use_llm:
                 with st.spinner("Running LLM semantic analysis (this may take a moment)..."):
                     try:
-                        llm_judgments = invoke_llm_for_judgment(preprocessed, all_nodes, all_rels)
+                        contract = build_evaluation_contract(all_nodes, all_rels, use_llm=False)
+                        llm_judgments = invoke_llm_for_judgment(preprocessed, contract)
                     except Exception as llm_err:
                         st.warning(f"LLM judgment step failed, falling back to deterministic evaluation: {llm_err}")
 
@@ -285,7 +289,7 @@ def render_test_case_evaluation_tab():
     
     if st.button("Generate Text Report", type="secondary", key="btn_legacy_text_report"):
         with st.spinner("Running LLM evaluation (this will take a moment)..."):
-            from graph.evaluation.legacy_report_generator import evaluate_test_cases_legacy
+            from graph.evaluation.test_case_evaluation_engine import evaluate_test_cases_legacy
             
             # Use original generated test cases from session state if available
             raw_tcs = (

@@ -7,7 +7,7 @@ and mapping family pairs to relationship types.
 
 import re
 
-from parser.item_patterns import find_id_mentions
+from parser.models import find_id_mentions
 
 # ── Family-pair -> relation type ────────────────────────────────────────
 # Keyed by (source_family, target_family) — i.e. the family of the item

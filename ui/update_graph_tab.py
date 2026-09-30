@@ -1,43 +1,21 @@
 import streamlit as st
 import pandas as pd
-from parser.text_input import wrap_pasted_text
+from parser.models import wrap_pasted_text
 from parser.parser import parse_document
 from chunking.chunker import create_chunks_from_items
 from graph.entity_extractor import extract_entities
-from graph.structural_linker import tag_extraction_source
+from graph.schemas import tag_extraction_source
 from graph.deduplicator import deduplicate_graph
 from graph.validator import validate_graph
 from graph.neo4j_manager import get_all_nodes, get_all_relationships
 from graph.incremental_merge import build_merge_plan, apply_merge_plan
 from graph.version_manager import snapshot_current_graph, new_version_id
-from graph.community_detector import run_full_community_detection
-from graph.community_summarizer import summarize_all_communities
-from graph.community_hierarchy import build_full_hierarchy
+from graph.community_engine import run_full_community_detection
+from graph.community_engine import summarize_all_communities
+from graph.community_engine import build_full_hierarchy
 from graph.langchain_qa import refresh_schema
 from parser.document_type_detector import detect_document_type
-from parser.template_normalizer import normalize_document
-from parser.normalization_validator import validate_normalized_document
-from parser.requirement_linker import link_requirements
-
-import streamlit as st
-import pandas as pd
-from parser.text_input import wrap_pasted_text
-from parser.parser import parse_document
-from chunking.chunker import create_chunks_from_items
-from graph.entity_extractor import extract_entities
-from graph.structural_linker import tag_extraction_source
-from graph.deduplicator import deduplicate_graph
-from graph.validator import validate_graph
-from graph.neo4j_manager import get_all_nodes, get_all_relationships
-from graph.incremental_merge import build_merge_plan, apply_merge_plan
-from graph.version_manager import snapshot_current_graph, new_version_id
-from graph.community_detector import run_full_community_detection
-from graph.community_summarizer import summarize_all_communities
-from graph.community_hierarchy import build_full_hierarchy
-from graph.langchain_qa import refresh_schema
-from parser.document_type_detector import detect_document_type
-from parser.template_normalizer import normalize_document
-from parser.normalization_validator import validate_normalized_document
+from parser.normalization import normalize_document, validate_normalized_document
 from parser.requirement_linker import link_requirements
 
 def render_update_graph_tab():

@@ -9,7 +9,7 @@ import math
 
 from graph.deduplicator import normalize_id, TYPE_PRIORITY
 from graph.neo4j_manager import insert_graph_with_batch, delete_relationships
-from embeddings.embedding_model import generate_embedding
+from vectorstore.chroma_manager import generate_embedding
 from parser.llm_client import call_ollama
 from config import EXTRACTION_MODEL, EXTRACTION_MODEL_URL
 

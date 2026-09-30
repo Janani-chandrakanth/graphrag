@@ -55,3 +55,12 @@ def render_dashboard_tab():
     else:
         st.caption("No versions retained yet — snapshots are created automatically when applying incremental updates in the Update Graph tab.")
 
+
+def render_graph_toolbar():
+    """Render toolbar controls for graph visualization tabs."""
+    st.sidebar.title("Graph Controls")
+    if st.sidebar.button("Refresh Graph"):
+        st.rerun()
+    st.sidebar.caption("You can add more controls here, e.g., filters, layout options.")
+
+

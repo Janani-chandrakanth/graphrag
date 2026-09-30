@@ -1,4 +1,3 @@
-
 import hashlib
 import json
 from collections import defaultdict
@@ -10,17 +9,15 @@ from graph.graph_test_case_generator import (
     _render_test_case_text,
     validate_and_align_precondition,
 )
-
-from graph.negative_scenario_generator import _catalog_for_series
-from graph.neo4j_manager import get_neighbor_nodes_db
-from embeddings.embedding_model import generate_embedding
-from vectorstore.chroma_manager import search_chunks
+from graph.neo4j_manager import get_neighbor_nodes_db, insert_graph, get_all_nodes
+from vectorstore.chroma_manager import generate_embedding, search_chunks
 
 _SOURCE_TEXT_MAX_CHARS = 4000
 _RELATED_CONTEXT_MAX_CHARS = 2500
 _MAX_GRAPH_NEIGHBORS = 30
 _VECTOR_TOP_K = 6          # over-fetched; own-series chunks filtered out after
 _VECTOR_MAX_CHUNKS_KEPT = 4
+_CATALOG_MAX_CHARS = 3000
 
 _HYBRID_PROMPT = """You are a senior QA engineer producing a COMPLETE, high-coverage test-case set for one requirement flow. You have THREE sources of grounding — use all of them together, they are not interchangeable:
 
@@ -53,6 +50,25 @@ Return ONLY a JSON array, no other text, no markdown fences, no comments. Order:
 {{"title": "<short scenario title>", "type": "Positive" or "Negative" or "Edge", "steps": ["<step 1>", "<step 2>", "..."], "expected_result": "<expected outcome>", "entities_used": ["<exact id or name from catalog>", "..."]}}
 """
 
+_NEGATIVE_PROMPT = """You are a QA engineer identifying NEGATIVE and EDGE-CASE test scenarios for one part of a system, based ONLY on entities already extracted from its requirements.
+
+REQUIREMENT SERIES: {req_ids}
+
+POSITIVE TEST CASE ALREADY BUILT FOR THIS SERIES:
+  Actor: {actor}
+  Feature: {feature}
+  Steps: {steps}
+  Expected Result: {expected_result}
+
+ENTITIES YOU MAY REFERENCE (id | type | name) — you may ONLY use entities from this list. Do NOT invent, assume, or reference anything not in this list. No external systems, no generic infrastructure ("the database", "the network", "the API") unless it is literally in the list below:
+{catalog}
+
+Propose 1 to 3 realistic NEGATIVE or EDGE-CASE scenarios that stress, negate, or find the boundary of the entities above (e.g. an entity's value is missing, invalid, unmatched, empty, out of range, or in an unexpected state) — grounded ENTIRELY in the entities listed. Every entity name in "entities_used" must be copied EXACTLY as it appears in the catalog above. If you cannot construct a grounded negative scenario from this list, return an empty array — do not fabricate one just to have something to say.
+
+Return ONLY a JSON array, no other text, no markdown fences. Each entry:
+{{"title": "<short scenario title>", "steps": ["<step 1>", "<step 2>", "..."], "expected_result": "<expected outcome>", "entities_used": ["<exact name from catalog>", "..."]}}
+"""
+
 
 def _resolve_prompt_template(prompt_name: str) -> str:
     try:
@@ -61,10 +77,45 @@ def _resolve_prompt_template(prompt_name: str) -> str:
         return _HYBRID_PROMPT
 
 
+def _resolve_negative_prompt_template(prompt_name: str) -> str:
+    try:
+        return _get_library_prompt(prompt_name)["template"]
+    except KeyError:
+        return _NEGATIVE_PROMPT
+
+
+def _catalog_for_series(source_items: list, nodes: list) -> tuple:
+    """
+    Entities already extracted for this series (node["source"] in the
+    series' item ids). Returns (catalog_text, valid_tokens).
+    """
+    entries = [
+        {"id": n["id"], "type": n.get("type", "?"), "name": n.get("name", n["id"])}
+        for n in nodes
+        if n.get("source") in source_items
+    ]
+    text = ""
+    for e in entries:
+        line = f"{e['id']} | {e['type']} | {e['name']}\n"
+        if text and len(text) + len(line) > _CATALOG_MAX_CHARS:
+            break
+        text += line
+    valid_tokens = set()
+    for e in entries:
+        valid_tokens.add(e["id"].strip().lower())
+        name_lower = e["name"].strip().lower()
+        valid_tokens.add(name_lower)
+        valid_tokens.add(name_lower.replace(" ", "_"))
+        valid_tokens.add(name_lower.replace("_", " "))
+    return text, valid_tokens
+
+
+def _escape_curly(text: str) -> str:
+    """Escape curly braces so str.format() treats them as literals."""
+    return text.replace("{", "{{").replace("}", "}}") if text else text
+
+
 def _source_text_for_series(source_items: list, chunks: list) -> str:
-    """Same as the old module: concatenate this series' own chunk text,
-    in document order, truncated so one oversized series can't blow
-    the prompt budget for everything else."""
     parts = []
     total = 0
     for c in chunks or []:
@@ -79,26 +130,6 @@ def _source_text_for_series(source_items: list, chunks: list) -> str:
 
 
 def _vector_related_context(query_text: str, source_items: list) -> tuple:
-    """
-    VECTOR half of hybrid retrieval: embed `query_text` (this series'
-    own feature/actor/steps) and search the WHOLE requirements_chunks
-    collection for the most semantically similar chunks anywhere in
-    the KB — including other series in this document, and anything
-    from previously ingested documents still sitting in the same
-    persistent Chroma collection.
-
-    Chunks whose own item_id is already in source_items are dropped
-    (that text is already sent in full as source_text — this step
-    exists specifically to surface OTHER, related material).
-
-    Returns (related_context_text, chunks_used) where chunks_used is
-    a list of {"item_id", "distance"} for transparency/warnings — the
-    caller reports how much genuinely-new context, if any, was found.
-
-    Never raises: a vector-store/embedding problem degrades to "no
-    related context found" rather than failing the whole series —
-    same never-worse-off-for-trying principle as the LLM-call fallback.
-    """
     if not query_text.strip():
         return "(no related context available)", []
 
@@ -119,7 +150,7 @@ def _vector_related_context(query_text: str, source_items: list) -> tuple:
         meta = meta or {}
         item_id = meta.get("item_id")
         if item_id in source_items:
-            continue  # already fully included as source_text
+            continue
         if not doc or not doc.strip():
             continue
         snippet = doc.strip()
@@ -138,16 +169,6 @@ def _vector_related_context(query_text: str, source_items: list) -> tuple:
 
 
 def _graph_neighbor_context(local_node_ids: list) -> tuple:
-    """
-    GRAPH half of hybrid retrieval: live 1-hop Cypher traversal out
-    from this series' own entities (graph/neo4j_manager.get_neighbor_nodes_db).
-
-    Returns (neighbor_entries, neighbor_error) where neighbor_entries
-    is [{"id","type","name","reached_from"}, ...]. Neo4j being
-    unreachable degrades to "no neighbor context" (never fails the
-    series) — same pattern graph/hybrid_retriever.py already uses for
-    the Q&A pipeline.
-    """
     if not local_node_ids:
         return [], None
     try:
@@ -158,12 +179,6 @@ def _graph_neighbor_context(local_node_ids: list) -> tuple:
 
 
 def _build_expanded_catalog(local_catalog_text: str, local_valid_tokens: set, neighbors: list) -> tuple:
-    """
-    Merge the series' own catalog with live graph neighbors into one
-    catalog block + one valid_tokens set, while keeping track of which
-    tokens are "local" vs "neighbor" so downstream reporting can say
-    which bucket an accepted entity actually came from.
-    """
     lines = [local_catalog_text] if local_catalog_text.strip() else []
     valid_tokens = set(local_valid_tokens)
     neighbor_tokens = set()
@@ -183,9 +198,187 @@ def _build_expanded_catalog(local_catalog_text: str, local_valid_tokens: set, ne
     return catalog_text, valid_tokens, neighbor_tokens
 
 
-def _escape_curly(text: str) -> str:
-    return text.replace("{", "{{").replace("}", "}}") if text else text
+# ── Standalone Negative Scenario Generation ─────────────────────────────────
 
+def generate_negative_scenarios(
+    positive_test_cases: list,
+    nodes: list,
+    model: str = None,
+    prompt_name: str = "edge_case_focused",
+) -> dict:
+    scenarios = []
+    warnings = []
+    seq_by_req = defaultdict(int)
+    active_template = _resolve_negative_prompt_template(prompt_name)
+
+    for tc in positive_test_cases:
+        req_ids = tc.get("source_items", [tc.get("req_id", "")])
+        catalog_text, valid_tokens = _catalog_for_series(req_ids, nodes)
+
+        if not catalog_text.strip():
+            warnings.append(
+                f"{tc.get('req_id')}: no entity catalog available for this "
+                f"series — skipped (nothing grounded to reason from)."
+            )
+            continue
+
+        prompt = active_template.format(
+            req_ids=", ".join(req_ids),
+            actor=_escape_curly(tc.get("actor", "?")),
+            feature=_escape_curly(tc.get("feature", "?")),
+            steps=_escape_curly("; ".join(tc.get("steps", []))),
+            expected_result=_escape_curly(tc.get("expected_result", "?")),
+            catalog=_escape_curly(catalog_text),
+        )
+
+        result = call_ollama(prompt, model=model)
+        if result["error"]:
+            warnings.append(f"{tc.get('req_id')}: LLM call failed — {result['error']}")
+            continue
+
+        try:
+            parsed = extract_json_block(result["raw"])
+            if not isinstance(parsed, list):
+                raise ValueError("expected a JSON array")
+        except (ValueError, json.JSONDecodeError) as e:
+            warnings.append(f"{tc.get('req_id')}: response could not be parsed — {e}")
+            continue
+
+        for entry in parsed:
+            title = (entry.get("title") or "").strip()
+            steps = entry.get("steps") or []
+            expected = (entry.get("expected_result") or "").strip()
+            entities_used = entry.get("entities_used") or []
+
+            if not title or not steps or not expected:
+                warnings.append(
+                    f"{tc.get('req_id')}: dropped a scenario missing "
+                    f"title/steps/expected_result."
+                )
+                continue
+
+            ungrounded = [
+                e for e in entities_used
+                if e.strip().lower() not in valid_tokens
+            ]
+            if ungrounded:
+                warnings.append(
+                    f"{tc.get('req_id')}: dropped scenario '{title}' — "
+                    f"referenced entities not in the graph (hallucinated): "
+                    f"{ungrounded}"
+                )
+                continue
+
+            seq_by_req[tc.get("req_id", "")] += 1
+            seq = seq_by_req[tc.get("req_id", "")]
+
+            scenarios.append({
+                "tc_id": f"TC-NEG-{tc.get('req_id', 'X')}-{seq:03d}",
+                "based_on_tc_id": tc.get("tc_id"),
+                "req_id": tc.get("req_id"),
+                "title": title,
+                "type": "Negative",
+                "priority": tc.get("priority", "Medium"),
+                "actor": tc.get("actor", "User"),
+                "feature": tc.get("feature", "?"),
+                "precondition": tc.get("precondition", ""),
+                "steps": steps,
+                "expected_result": expected,
+                "graph_nodes": entities_used,
+                "source_items": req_ids,
+                "fallbacks": [],
+                "llm_derived": True,
+            })
+
+    return {"scenarios": scenarios, "warnings": warnings, "prompt_used": prompt_name}
+
+
+# ── Test Case Graph Writing / Persistence ────────────────────────────────────
+
+def _tc_node_id(tc_id: str) -> str:
+    return f"TESTCASE::{tc_id}"
+
+
+def build_test_case_graph_elements(test_cases: list, nodes: list) -> tuple:
+    """
+    Convert test case list into (nodes, relationships) ready for neo4j_manager.insert_graph().
+    """
+    try:
+        live_nodes = get_all_nodes()
+    except Exception:
+        live_nodes = []
+
+    token_to_id = {}
+    all_ids = set()
+    for n in (live_nodes + list(nodes)):
+        node_id = n.get("id")
+        if not node_id:
+            continue
+        all_ids.add(node_id)
+        token_to_id[node_id.strip().lower()] = node_id
+        name = n.get("name")
+        if name:
+            token_to_id.setdefault(name.strip().lower(), node_id)
+
+    new_nodes = []
+    new_rels = []
+
+    for tc in test_cases:
+        if not isinstance(tc, dict):
+            continue
+        tc_node_id = _tc_node_id(tc["tc_id"])
+
+        new_nodes.append({
+            "id": tc_node_id,
+            "name": tc["tc_id"],
+            "type": "TestCase",
+            "description": tc.get("title", ""),
+            "source": tc.get("req_id"),
+            "aliases": [],
+        })
+
+        seen_targets = set()
+        for token in tc.get("graph_nodes", []):
+            target_id = token_to_id.get(token.strip().lower()) if token else None
+            if not target_id or target_id in seen_targets:
+                continue
+            seen_targets.add(target_id)
+            new_rels.append({"from": tc_node_id, "to": target_id, "type": "VALIDATES"})
+
+        for req_id in tc.get("source_items", []):
+            if req_id in all_ids:
+                new_rels.append({"from": tc_node_id, "to": req_id, "type": "VERIFIES"})
+
+    return new_nodes, new_rels
+
+
+def write_test_cases_to_graph(test_cases: list, nodes: list) -> dict:
+    """
+    Build + write test case nodes/edges to Neo4j in one call.
+    """
+    tc_nodes, tc_rels = build_test_case_graph_elements(test_cases, nodes)
+    insert_graph(tc_nodes, tc_rels)
+
+    validates_count = sum(1 for r in tc_rels if r["type"] == "VALIDATES")
+    verifies_count = sum(1 for r in tc_rels if r["type"] == "VERIFIES")
+
+    unresolved = [
+        tc["tc_id"] for tc in test_cases
+        if isinstance(tc, dict) and tc.get("graph_nodes") and not any(
+            r["from"] == _tc_node_id(tc["tc_id"]) and r["type"] == "VALIDATES"
+            for r in tc_rels
+        )
+    ]
+
+    return {
+        "test_case_nodes_written": len(tc_nodes),
+        "validates_edges_written": validates_count,
+        "verifies_edges_written": verifies_count,
+        "test_cases_with_no_resolved_edges": unresolved,
+    }
+
+
+# ── Hybrid Test Case Generator Main ──────────────────────────────────────────
 
 def generate_hybrid_test_cases(
     nodes: list,
@@ -196,30 +389,6 @@ def generate_hybrid_test_cases(
     model: str = None,
     prompt_name: str = "hybrid_flow",
 ) -> dict:
-    """
-    Args:
-        nodes, relationships: session_state's validated graph.
-        items_with_links, links: parser/requirement_linker.py output —
-            used only for series grouping/ordering.
-        chunks: session_state["chunks"] — create_chunks_from_items()
-            output, gives per-series raw source text and is also the
-            corpus searched for related context (item_id metadata is
-            matched against what's actually stored in Chroma).
-        model: None uses the pipeline's default model.
-        prompt_name: prompts/prompt_library.py style to use ("hybrid_test_cases"
-            category). Falls back to the fixed template above if not found.
-
-    Returns:
-        {
-            "test_cases": [ {...same shape as before, plus "llm_derived": bool,
-                              "graph_context": {"local": [...], "neighbor": [...]},
-                              "vector_context_used": [...]}, ... ],
-            "text": str,
-            "warnings": [str, ...],
-            "summary": {...},
-            "prompt_used": str,
-        }
-    """
     links = links or []
     chunks = chunks or []
     if not items_with_links:
@@ -241,9 +410,6 @@ def generate_hybrid_test_cases(
 
     active_template = _resolve_prompt_template(prompt_name)
 
-    # ── Pre-flight LLM reachability check ────────────────────────────────────
-    # A single fast probe (3s connect timeout) so we don't sit through 100+
-    # per-skeleton timeouts when the remote LLM server is offline.
     import requests as _requests
     from config import OLLAMA_URL as _OLLAMA_URL
     _llm_available = False
@@ -259,9 +425,6 @@ def generate_hybrid_test_cases(
 
     if not _llm_available:
         _all_tcs = skeleton_result.get("test_cases", [])
-        _text = "\n\n".join(
-            tc.get("steps", [""])[0] for tc in _all_tcs if isinstance(tc, dict)
-        )
         return {
             "test_cases": [{**tc, "llm_derived": False} for tc in _all_tcs],
             "text": skeleton_result.get("text", ""),
@@ -279,13 +442,12 @@ def generate_hybrid_test_cases(
             },
             "prompt_used": prompt_name,
         }
-    # ─────────────────────────────────────────────────────────────────────────
 
     test_cases = []
     warnings = []
     seq_by_req = defaultdict(int)
-    seen_tc_keys = set()   # (req_id, type, title_lower, steps_hash) — scenario dedup
-    seen_tc_ids: set = set()   # final TC-ID strings — collision guard (Issue 3)
+    seen_tc_keys = set()
+    seen_tc_ids: set = set()
 
     for skeleton in skeleton_result["test_cases"]:
         tc_id = skeleton.get("tc_id", "")
@@ -376,7 +538,6 @@ def generate_hybrid_test_cases(
                 )
                 continue
 
-            # Title & step deduplication check
             title_lower = title.strip().lower()
             steps_hash = hash(tuple(s.strip().lower() for s in steps))
             tc_key = (skeleton.get("req_id"), case_type, title_lower, steps_hash)
@@ -392,13 +553,11 @@ def generate_hybrid_test_cases(
             seq_by_req[skeleton.get("req_id")] = tc_num
             req_id = skeleton.get("req_id")
             is_combined = len(req_ids) > 1
-            # Issue 3: add 4-char title hash so TC-IDs are unique across requirement series
             title_hash = hashlib.sha256(title.encode()).hexdigest()[:4]
             tc_id = (
                 f"TC-COMBINED-{req_id}-HYB-{tc_num:03d}-{title_hash}" if is_combined
                 else f"TC-{req_id}-HYB-{tc_num:03d}-{title_hash}"
             )
-            # Issue 3: fail the batch on a true TC-ID collision (pipeline invariant violated)
             if tc_id in seen_tc_ids:
                 raise RuntimeError(
                     f"TC-ID collision detected: '{tc_id}' was already generated in this batch. "
@@ -406,8 +565,6 @@ def generate_hybrid_test_cases(
                 )
             seen_tc_ids.add(tc_id)
 
-            # Validate and possibly re‑derive the precondition
-            from graph.graph_test_case_generator import validate_and_align_precondition
             tc_candidate = {
                 "tc_id": tc_id,
                 "req_id": req_id,
@@ -432,7 +589,6 @@ def generate_hybrid_test_cases(
                 test_cases.append(tc_aligned)
             else:
                 warnings.append(f"{req_id}: precondition mismatch after LLM generation — kept graph‑only draft.")
-                # Do not add this case; fallback will be added later
 
             kept_any = True
 

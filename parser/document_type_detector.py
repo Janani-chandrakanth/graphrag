@@ -15,10 +15,10 @@ pattern the chunker already uses for pattern-detection-vs-LangChain-fallback,
 applied one level up.
 """
 
-from parser.structure_preserver import DocumentStructure
-from parser.item_patterns import DOC_TYPE_KEYWORDS, DOC_TYPE_ID_FAMILIES, count_families_in_text
+from parser.normalization import DocumentStructure
+from parser.models import DOC_TYPE_KEYWORDS, DOC_TYPE_ID_FAMILIES, count_families_in_text
 from parser.llm_client import call_ollama, extract_json_block
-from parser.templates import DOCUMENT_TYPES
+from parser.models import DOCUMENT_TYPES
 
 # Below this top-score confidence, or when the top two scores are within
 # CONFLICT_MARGIN of each other, fall back to the LLM.

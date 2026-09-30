@@ -2,11 +2,11 @@ import json
 import streamlit as st
 import pandas as pd
 from graph.langchain_qa import ask_graph, refresh_schema
-from graph.query_subgraph import extract_subgraph_from_result
+from graph.query_engine import extract_subgraph_from_result
 from graph.neo4j_manager import run_cypher_query
 from graph.graph_visualizer import render_graph
 from graph.version_manager import list_versions, get_version_snapshot, get_current_graph_as_version
-from graph.graph_diff import diff_graphs
+from graph.version_manager import diff_graphs
 
 def render_query_graph_tab():
     st.header("Search and Query")

@@ -10,13 +10,146 @@ Complete GraphRAG query pipeline with level selection:
 import json
 import requests
 from config import OLLAMA_URL
-from embeddings.embedding_model import generate_embedding
 from vectorstore.chroma_manager import (
+    generate_embedding,
     search_community_summaries,
     get_summaries_collection_count,
     get_summaries_count_by_level
 )
-from graph.hybrid_retriever import retrieve_graph_facts, build_graph_facts_text
+from graph.neo4j_manager import (
+    get_all_nodes,
+    get_all_relationships,
+    get_community_nodes_db,
+    get_community_relationships_db
+)
+
+
+# =========================================================
+# 1. HYBRID RETRIEVAL (LIVE CYPHER TRAVERSAL)
+# =========================================================
+
+def retrieve_graph_facts(community_ids: list, max_nodes_per_community: int = 25) -> dict:
+    """
+    Live Cypher pull of each matched community's current
+    nodes/relationships — the "Graph Traversal" half of hybrid search.
+    """
+    seen_node_ids = set()
+    all_nodes = []
+    all_rels = []
+    traversed = []
+
+    for cid in community_ids:
+        try:
+            cid_int = int(cid)
+        except (TypeError, ValueError):
+            continue
+
+        nodes = get_community_nodes_db(cid_int)[:max_nodes_per_community]
+        rels = get_community_relationships_db(cid_int)
+
+        if not nodes:
+            continue
+
+        traversed.append(cid_int)
+        kept_ids = {n["id"] for n in nodes}
+        for n in nodes:
+            if n["id"] not in seen_node_ids:
+                seen_node_ids.add(n["id"])
+                all_nodes.append(n)
+        for r in rels:
+            if r["from"] in kept_ids and r["to"] in kept_ids:
+                all_rels.append(r)
+
+    return {
+        "nodes": all_nodes,
+        "relationships": all_rels,
+        "communities_traversed": traversed,
+    }
+
+
+def build_graph_facts_text(graph_facts: dict) -> str:
+    """
+    Render live graph facts as compact "Node -[REL]-> Node" lines for
+    prompt inclusion.
+    """
+    if not graph_facts.get("nodes"):
+        return ""
+
+    id_to_name = {n["id"]: n.get("name", n["id"]) for n in graph_facts["nodes"]}
+
+    lines = []
+    for r in graph_facts.get("relationships", []):
+        src = id_to_name.get(r["from"], r["from"])
+        tgt = id_to_name.get(r["to"], r["to"])
+        lines.append(f"({src}) -[{r['type']}]-> ({tgt})")
+
+    edged_ids = {r["from"] for r in graph_facts.get("relationships", [])} | {
+        r["to"] for r in graph_facts.get("relationships", [])
+    }
+    isolated = [n for n in graph_facts["nodes"] if n["id"] not in edged_ids]
+    for n in isolated:
+        lines.append(f"({n.get('name', n['id'])}) [{n.get('type', '?')}, no traversed edges]")
+
+    return "\n".join(lines)
+
+
+# =========================================================
+# 2. SUBGRAPH EXTRACTION (FROM CYPHER RESULTS)
+# =========================================================
+
+def _candidate_strings_from_result(result_rows: list) -> set:
+    """Pulls every plausible node-identifying string out of arbitrary
+    Cypher result rows."""
+    found = set()
+
+    def walk(value):
+        if isinstance(value, str):
+            found.add(value.strip().lower())
+        elif isinstance(value, dict):
+            for key in ("id", "name"):
+                if key in value and isinstance(value[key], str):
+                    found.add(value[key].strip().lower())
+            for v in value.values():
+                walk(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                walk(v)
+
+    for row in result_rows:
+        walk(row)
+    return found
+
+
+def extract_subgraph_from_result(result_rows: list, nodes: list = None, relationships: list = None) -> tuple:
+    """
+    Extracts subgraph nodes and relationships that correspond to raw Cypher result rows.
+    """
+    if nodes is None or relationships is None:
+        nodes = get_all_nodes()
+        relationships = get_all_relationships()
+
+    if not result_rows:
+        return [], []
+
+    candidates = _candidate_strings_from_result(result_rows)
+    if not candidates:
+        return [], []
+
+    matched_ids = {
+        n["id"] for n in nodes
+        if n.get("id", "").strip().lower() in candidates
+        or n.get("name", "").strip().lower() in candidates
+    }
+    if not matched_ids:
+        return [], []
+
+    subgraph_nodes = [n for n in nodes if n["id"] in matched_ids]
+    subgraph_relationships = [
+        r for r in relationships
+        if r["from"] in matched_ids and r["to"] in matched_ids
+    ]
+    return subgraph_nodes, subgraph_relationships
+
 
 
 QUERY_PROMPT = """

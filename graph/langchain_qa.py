@@ -88,7 +88,7 @@ def _get_entity_embeddings() -> dict:
     if _entity_embedding_cache is not None:
         return _entity_embedding_cache
 
-    from embeddings.embedding_model import generate_embedding
+    from vectorstore.chroma_manager import generate_embedding
     from graph.neo4j_manager import get_all_nodes
 
     cache = {}
@@ -110,7 +110,7 @@ def _semantic_entity_link(question: str, top_k: int = 8, min_similarity: float =
     sorted best-first. Empty list if nothing clears the similarity bar
     -- an empty hint is better than injecting irrelevant entities that
     could steer the Cypher generation toward the wrong node."""
-    from embeddings.embedding_model import generate_embedding
+    from vectorstore.chroma_manager import generate_embedding
 
     cache = _get_entity_embeddings()
     if not cache:
@@ -244,7 +244,7 @@ def _vector_fallback(question: str, n_results: int = 5) -> dict:
     ChromaDB collection the ingestion pipeline already populates, so the
     person gets the closest matching source text instead of a hard
     'nothing found' -- doesn't touch Neo4j or Cypher at all."""
-    from embeddings.embedding_model import generate_embedding
+    from vectorstore.chroma_manager import generate_embedding
     from vectorstore.chroma_manager import search_chunks
 
     try:

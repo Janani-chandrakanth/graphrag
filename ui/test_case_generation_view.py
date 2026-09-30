@@ -1,7 +1,6 @@
 import streamlit as st
 from graph.neo4j_manager import get_all_nodes, get_all_relationships
-from graph.hybrid_test_case_generator import generate_hybrid_test_cases
-from graph.test_case_writer import write_test_cases_to_graph
+from graph.hybrid_test_case_generator import generate_hybrid_test_cases, write_test_cases_to_graph
 
 def render_test_case_generation_section():
     st.subheader("Test Case Generation")

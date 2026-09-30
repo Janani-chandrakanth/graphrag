@@ -2,45 +2,53 @@ import os
 os.environ["UUID_UTILS_PURE_PYTHON"] = "1"
 
 import streamlit as st
-import importlib
-import graph.structural_linker
-importlib.reload(graph.structural_linker)
-from graph.structural_linker import tag_extraction_source
+from graph.schemas import tag_extraction_source, build_graph, WorkflowModel, Feature, Step
 from graph.entity_extractor import extract_entities
-from graph.graph_builder import build_graph
 from graph.deduplicator import deduplicate_graph
-from graph.confidence_scorer import score_graph, LOW_CONFIDENCE_THRESHOLD
+from graph.graph_analysis import (
+    score_graph,
+    LOW_CONFIDENCE_THRESHOLD,
+    evaluate_structure,
+    trace_failure,
+    format_trace_report,
+)
 from graph.validator import validate_graph
 from graph.graph_test_case_generator import _render_test_case_text
-from graph.test_case_writer import write_test_cases_to_graph
-from graph.failure_trace import trace_failure, format_trace_report
+from graph.hybrid_test_case_generator import (
+    generate_hybrid_test_cases,
+    write_test_cases_to_graph,
+)
 from prompts.prompt_library import list_prompts, get_prompt, save_prompt, validate_hybrid_template
-from graph.hybrid_test_case_generator import generate_hybrid_test_cases
 from graph.cross_reference_linker import find_cross_references
-from graph.graph_eval import evaluate_structure
 from graph.neo4j_manager import run_cypher_query, clear_graph
 from config import EXTRACTION_MODEL, EXTRACTION_MODEL_URL, CROSS_REF_MODEL, CROSS_REF_MODEL_URL
-from graph.community_detector import (
+from graph.community_engine import (
     run_full_community_detection,
     get_all_communities,
     get_community_nodes,
-    get_community_relationships
+    get_community_relationships,
+    summarize_all_communities,
+    build_full_hierarchy,
 )
-from graph.community_summarizer import summarize_all_communities
-from graph.community_hierarchy import build_full_hierarchy
 from graph.langchain_qa import ask_graph, refresh_schema
-from graph.query_subgraph import extract_subgraph_from_result
+from graph.query_engine import extract_subgraph_from_result
 from chunking.chunker import create_chunks_from_items
-from embeddings.embedding_model import generate_embedding
+from vectorstore.chroma_manager import (
+    generate_embedding,
+    store_chunk,
+    get_collection_stats,
+    get_summaries_count_by_level,
+)
 from parser.parser import parse_document
 from parser.document_type_detector import detect_document_type
-from parser.template_normalizer import normalize_document, normalized_to_markdown
-from parser.canonicalizer import (
+from parser.normalization import (
+    normalize_document,
+    normalized_to_markdown,
     canonicalize_document,
     canonical_to_structure,
     AVAILABLE_CANONICALIZER_MODELS,
+    validate_normalized_document,
 )
-from parser.normalization_validator import validate_normalized_document
 from parser.requirement_linker import link_requirements
 from graph.graph_visualizer import (
     render_graph as _viz_render_graph,
@@ -50,35 +58,35 @@ from graph.graph_visualizer import (
     NODE_COLORS,
 )
 # ── Incremental Update / Versioning / Comparison (new) ──────
-from parser.text_input import wrap_pasted_text
+from parser.models import wrap_pasted_text
 from graph.neo4j_manager import (
     get_all_nodes, get_all_relationships, store_workflow,
     get_stored_documents, get_graph_by_document
 )
 from graph.incremental_merge import build_merge_plan, apply_merge_plan
 from graph.workflow_extractor import extract_workflow, extract_workflow_from_graph
-from graph.models import WorkflowModel, Feature, Step
 from graph.version_manager import (
     snapshot_current_graph, list_versions, get_version_snapshot,
-    get_current_graph_as_version, new_version_id,
+    get_current_graph_as_version, new_version_id, diff_graphs,
 )
-from graph.graph_diff import diff_graphs
 # Import for UI components
 from ui.dashboard_tab import render_dashboard_tab
 from ui.update_graph_tab import render_update_graph_tab
 from ui.compare_tab import render_compare_tab
 from ui.query_graph_tab import render_query_graph_tab
 from ui.feature_flow_tab import render_feature_flow_tab
-from ui.graph_controls import render_graph_toolbar
+from ui.dashboard_tab import render_graph_toolbar
 from ui.graph_evaluation_view import render_graph_quality_section
 from ui.test_case_generation_view import render_test_case_generation_section
 # Evaluation imports
-from graph.evaluation.facts import generate_evaluation_facts
-from graph.evaluation.fact_evaluator import evaluate_fact
-from graph.evaluation.relationship_evaluator import evaluate_relationships
-from graph.evaluation.workflow_evaluator import evaluate_workflow
-from graph.evaluation.node_coverage import compute_node_coverage
-from graph.evaluation.report import build_evaluation_report
+from graph.evaluation.graph_evaluators import (
+    generate_evaluation_facts,
+    evaluate_fact,
+    evaluate_relationships,
+    evaluate_workflow,
+    compute_node_coverage,
+    build_evaluation_report,
+)
 from ui.evaluation_tab import render_evaluation_tab
 from ui.test_case_evaluation_tab import render_test_case_evaluation_tab
 # ── Caching heavy read operations for Streamlit performance ──
@@ -267,7 +275,7 @@ with main_tab_build:
                     _tmp.write(mm_file.read())
                     mm_path = _tmp.name
                 if mm_ext == ".xlsx":
-                    from parser.excel_extractor import extract_excel_requirements
+                    from parser.extractors import extract_excel_requirements
                     if st.button("Parse spreadsheet", key="mm_parse_xlsx"):
                         st.session_state["mm_result"] = extract_excel_requirements(mm_path, source=mm_file.name)
                     result = st.session_state.get("mm_result")
@@ -288,7 +296,7 @@ with main_tab_build:
                                 st.success(f"Added {len(result['nodes'])} Requirement nodes to the graph.")
                                 st.rerun()
                 else:  # .png / .jpg / .jpeg
-                    from parser.vision_extractor import extract_flowchart_entities
+                    from parser.extractors import extract_flowchart_entities
                     st.image(mm_path, width=400)
                     if st.button("Parse flowchart", key="mm_parse_img"):
                         with st.spinner("Running vision model..."):

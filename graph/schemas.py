@@ -1,5 +1,77 @@
+from dataclasses import dataclass, field
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Literal, Optional, Dict
+
+
+# =========================================================
+# WORKFLOW & FEATURE MODELS (Dataclasses)
+# =========================================================
+
+@dataclass
+class Step:
+    """Represents a single workflow step."""
+    id: str
+    action: str
+    actors: List[str] = field(default_factory=list)
+    systems: List[str] = field(default_factory=list)
+    data_objects: List[str] = field(default_factory=list)
+    conditions: List[str] = field(default_factory=list)
+    next_steps: List[str] = field(default_factory=list)
+    attributes: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class Feature:
+    """A feature containing an ordered list of steps."""
+    name: str
+    steps: List[Step] = field(default_factory=list)
+    attributes: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class WorkflowModel:
+    """Top‑level model holding all extracted features."""
+    features: List[Feature] = field(default_factory=list)
+    attributes: Dict[str, str] = field(default_factory=dict)
+
+
+# =========================================================
+# STRUCTURAL LINKER HELPER
+# =========================================================
+
+def tag_extraction_source(graph_data: dict, item_id: str, doc_id: str = None, *args, **kwargs) -> dict:
+    """
+    Tag every node/relationship extract_entities() returned for one
+    chunk with the requirement item it came from (populates the
+    "source" field graph/schemas.py's Node/Relationship models already
+    define). Optionally tags doc_id for document-level filtering.
+    """
+    effective_doc_id = doc_id or kwargs.get("doc_id")
+    for node in graph_data.get("nodes", []):
+        node["source"] = item_id
+        if effective_doc_id:
+            node["doc_id"] = effective_doc_id
+
+    for rel in graph_data.get("relationships", []):
+        rel["source"] = item_id
+        if effective_doc_id:
+            rel["doc_id"] = effective_doc_id
+
+    return graph_data
+
+
+# =========================================================
+# GRAPH BUILDER HELPER
+# =========================================================
+
+def build_graph(extracted_result):
+    from graph.neo4j_manager import insert_graph
+
+    nodes = extracted_result.get("nodes", [])
+    relationships = extracted_result.get("relationships", [])
+    print(f"Nodes: {len(nodes)}")
+    print(f"Relationships: {len(relationships)}")
+    insert_graph(nodes, relationships)
 
 
 # =========================================================

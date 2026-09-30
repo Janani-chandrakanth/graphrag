@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from graph.neo4j_manager import get_all_nodes, get_all_relationships
-from graph.graph_eval import evaluate_structure
+from graph.graph_analysis import evaluate_structure
 from graph.flow_graph_analysis import analyze_flow_detailed
 from graph.graph_visualizer import render_graph
 

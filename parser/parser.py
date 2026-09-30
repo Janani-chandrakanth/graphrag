@@ -16,10 +16,10 @@ New code (Document Type Detector, Template Normalizer, etc.) should call
 just the flattened Markdown string.
 """
 
-from parser.structure_preserver import DocumentStructure
-from parser.docx_extractor import extract_docx_structure
-from parser.pdf_extractor import extract_pdf_structure
-from parser.txt_extractor import extract_txt_structure
+from parser.normalization import DocumentStructure
+from parser.extractors import extract_docx_structure
+from parser.extractors import extract_pdf_structure
+from parser.extractors import extract_txt_structure
 
 
 def parse_document(uploaded_file) -> DocumentStructure:

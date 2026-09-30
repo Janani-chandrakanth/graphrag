@@ -6,6 +6,27 @@ Manages two collections:
 """
 
 import chromadb
+import json
+import requests
+from config import OLLAMA_EMBED_URL, EMBED_MODEL
+
+
+def generate_embedding(text):
+    """
+    Embedding generation via Ollama /api/embeddings.
+    """
+    payload = {
+        "model": EMBED_MODEL,
+        "prompt": text
+    }
+    response = requests.post(
+        OLLAMA_EMBED_URL,
+        json=payload,
+        proxies={"http": None, "https": None}
+    )
+    response.raise_for_status()
+    return response.json()["embedding"]
+
 
 client = chromadb.PersistentClient(path="./chroma_db")
 

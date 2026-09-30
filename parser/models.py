@@ -1,19 +1,16 @@
+# --- Merged from item_patterns.py, templates.py, text_input.py ---
 """
-Item ID Pattern Registry — shared by Document Type Detector and Template Normalizer
+parser/models.py
 
-The existing chunking/chunker.py has its own PATTERN_REGISTRY, but it's built
-for a different job: capturing the *full block of text* from one ID to the
-next (greedy split-on-boundary). Here we need the opposite — a cheap way to
-ask "does this single line/block *start with* a known ID token?" — so the
-Document Type Detector can count family frequency, and the Template
-Normalizer can decide per-block whether regex already caught it (Pass A) or
-it needs to fall through to the LLM gap-filler (Pass B).
-
-Families intentionally mirror chunker.py's naming (FR, NFR, BR, TC, US, UC,
-REQ) so a family detected here means the same thing it means there.
+Consolidated models, pattern registry, canonical templates, and text input wrappers:
+- Item ID pattern matching and family detection (formerly item_patterns.py)
+- Canonical templates per document type (formerly templates.py)
+- Pasted-text input file wrapper (formerly text_input.py)
 """
 
+import io
 import re
+from datetime import datetime, timezone
 
 # ── Per-family ID token patterns (anchored at start of string) ─────────
 # Each compiled pattern matches just the ID token itself, e.g. "FR-001",
@@ -167,3 +164,90 @@ def count_families_in_text(text: str) -> dict:
         if matches:
             counts[family] = len(matches)
     return counts
+
+
+# ── Canonical Templates (formerly templates.py) ───────────────────────
+
+DOCUMENT_TYPES = ["BRD", "SRS", "USER_STORY_DOC", "TEST_PLAN", "MIXED", "UNKNOWN"]
+
+CANONICAL_TEMPLATES = {
+    "BRD": {
+        "item_type": "business_requirement",
+        "id_families": DOC_TYPE_ID_FAMILIES["BRD"],
+        "fields": ["description", "stakeholders", "rationale"],
+        "description": "Business Requirements Document — business rules and objectives.",
+        "extra_categories": [
+            "business_context", "assumption", "constraint",
+            "dependency", "risk", "glossary_term",
+        ],
+    },
+    "SRS": {
+        "item_type": "system_requirement",
+        "id_families": DOC_TYPE_ID_FAMILIES["SRS"],
+        "fields": ["description", "priority", "actor"],
+        "description": "Software/System Requirements Spec — functional & non-functional requirements.",
+        "extra_categories": [
+            "assumption", "constraint", "dependency", "risk", "glossary_term",
+        ],
+    },
+    "USER_STORY_DOC": {
+        "item_type": "user_story",
+        "id_families": DOC_TYPE_ID_FAMILIES["USER_STORY_DOC"],
+        "fields": ["actor", "action", "benefit", "acceptance_criteria"],
+        "description": "User Story collection — 'As a ... I want ... so that ...' format.",
+        "extra_categories": ["assumption", "constraint", "glossary_term"],
+    },
+    "TEST_PLAN": {
+        "item_type": "test_case",
+        "id_families": DOC_TYPE_ID_FAMILIES["TEST_PLAN"],
+        "fields": ["preconditions", "steps", "expected_result"],
+        "description": "Test Plan / Test Case document.",
+        "extra_categories": ["assumption", "constraint"],
+    },
+    "MIXED": {
+        "item_type": "requirement_item",
+        "id_families": ["FR", "NFR", "BR", "TC", "UC", "US", "US_PROSE", "REQ"],
+        "fields": ["description"],
+        "description": "Multiple document types detected with comparable confidence.",
+        "extra_categories": [
+            "business_context", "assumption", "constraint",
+            "dependency", "risk", "glossary_term",
+        ],
+    },
+    "UNKNOWN": {
+        "item_type": "item",
+        "id_families": ["FR", "NFR", "BR", "TC", "UC", "US", "US_PROSE", "REQ"],
+        "fields": ["description"],
+        "description": "Document type could not be determined.",
+        "extra_categories": [
+            "business_context", "assumption", "constraint",
+            "dependency", "risk", "glossary_term",
+        ],
+    },
+}
+
+
+def get_template(doc_type: str) -> dict:
+    """Look up a template, falling back to UNKNOWN for unrecognized types
+    rather than raising — normalization should always be able to run."""
+    template = CANONICAL_TEMPLATES.get(doc_type, CANONICAL_TEMPLATES["UNKNOWN"])
+    template.setdefault("extra_categories", [])
+    if "other" not in template["extra_categories"]:
+        template = {**template, "extra_categories": template["extra_categories"] + ["other"]}
+    return template
+
+
+# ── Pasted-text input adapter (formerly text_input.py) ─────────────────
+
+class PastedTextFile(io.BytesIO):
+    """BytesIO with a `.name` attribute."""
+
+    def __init__(self, text: str, filename: str = None):
+        super().__init__((text or "").encode("utf-8"))
+        self.name = filename or f"pasted_text_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.txt"
+
+
+def wrap_pasted_text(text: str, filename: str = None) -> PastedTextFile:
+    """Wrap raw text so it can be passed straight into
+    parser.parser.parse_document() / parse_document's callers."""
+    return PastedTextFile(text, filename)

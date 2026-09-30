@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from graph.version_manager import list_versions, get_version_snapshot, get_current_graph_as_version
-from graph.graph_diff import diff_graphs
+from graph.version_manager import diff_graphs
 from graph.graph_visualizer import render_diff_graph
 
 def render_compare_tab():

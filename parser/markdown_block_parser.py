@@ -14,7 +14,7 @@ needs to know or care that a PDF was involved at all.
 """
 
 import re
-from parser.structure_preserver import Block
+from parser.normalization import Block
 
 _ATX_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)")
 _BULLET_RE = re.compile(r"^\s*[-\*+•●▪]\s+(.*)")

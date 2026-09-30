@@ -667,7 +667,7 @@ def write_community_ids(partition: dict) -> dict:
     }
 
 # ----- Workflow storage utilities -----
-from .models import WorkflowModel, Feature, Step
+from .schemas import WorkflowModel, Feature, Step
 
 def store_workflow(workflow: WorkflowModel, doc_id: str = None) -> None:
     """Store extracted workflow into Neo4j.

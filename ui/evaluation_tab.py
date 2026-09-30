@@ -9,12 +9,12 @@ import streamlit as st
 from typing import Dict, Any
 
 from graph.neo4j_manager import get_all_nodes, get_all_relationships
-from graph.evaluation.facts import generate_evaluation_facts
-from graph.evaluation.fact_evaluator import evaluate_information_retention
-from graph.evaluation.relationship_evaluator import evaluate_relationships
-from graph.evaluation.workflow_evaluator import evaluate_workflow
-from graph.evaluation.node_coverage import compute_node_coverage
-from graph.evaluation.report import build_evaluation_report, save_evaluation_run, get_evaluation_history
+from graph.evaluation.graph_evaluators import generate_evaluation_facts
+from graph.evaluation.graph_evaluators import evaluate_information_retention
+from graph.evaluation.graph_evaluators import evaluate_relationships
+from graph.evaluation.graph_evaluators import evaluate_workflow
+from graph.evaluation.graph_evaluators import compute_node_coverage
+from graph.evaluation.graph_evaluators import build_evaluation_report, save_evaluation_run, get_evaluation_history
 
 
 def render_evaluation_tab():
