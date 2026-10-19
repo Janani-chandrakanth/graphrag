@@ -1,5 +1,12 @@
 import os
+import time
 os.environ["UUID_UTILS_PURE_PYTHON"] = "1"
+
+# ── Logging must be initialised before any other project import ──────────────
+from logging_config import setup_logging
+setup_logging()
+import logging
+logger = logging.getLogger(__name__)
 
 import streamlit as st
 from graph.schemas import tag_extraction_source, build_graph, WorkflowModel, Feature, Step
@@ -108,6 +115,7 @@ def cached_get_collection_stats():
 @st.cache_data
 def cached_get_summaries_count_by_level():
     return get_summaries_count_by_level()
+logger.info("Application startup | GraphRAG Streamlit app initialising")
 st.set_page_config(page_title="GraphRAG", layout="wide")
 st.title("Requirement GraphRAG")
 with st.sidebar:
@@ -329,8 +337,14 @@ with main_tab_build:
             if st.button("Build Index", key="btn_build_index_build"):
                 with st.spinner("Processing document..."):
                     try:
+                        _t_pipeline_start = time.perf_counter()
+                        logger.info("Build Index started | file=%s", uploaded_file.name)
                         structure = parse_document(uploaded_file)
                         text = structure.to_markdown()
+                        logger.info(
+                            "Document parsed | file=%s | text_chars=%d",
+                            uploaded_file.name, len(text),
+                        )
                         st.session_state["extracted_text"] = text
                         st.session_state["raw_text"] = text
                         st.session_state["uploaded_filename"] = uploaded_file.name
@@ -355,6 +369,11 @@ with main_tab_build:
                             }
                         else:
                             detection = detect_document_type(structure)
+                        logger.info(
+                            "Document type detected | type=%s | confidence=%.0f%% | method=%s",
+                            detection.get("doc_type"), detection.get("confidence", 0) * 100,
+                            detection.get("method"),
+                        )
                         st.session_state["doc_type_detection"] = detection
                         normalized = normalize_document(structure, detection["doc_type"])
                         st.session_state["normalized_document"] = normalized
@@ -444,7 +463,15 @@ with main_tab_build:
                         # create_chunks(text) call. id/family/linked_ids
                         # metadata now survives into ChromaDB.
                         chunks = create_chunks_from_items(linked["items_with_links"])
+                        logger.info(
+                            "Chunking complete | file=%s | chunks=%d | items_in=%d",
+                            uploaded_file.name, len(chunks), len(linked["items_with_links"]),
+                        )
                         if not chunks:
+                            logger.warning(
+                                "No chunks produced for file=%s — all items need review",
+                                uploaded_file.name,
+                            )
                             st.warning(
                                 "No valid items to chunk — check the Review Queue above; "
                                 "everything normalized from this document needs human review."
@@ -482,6 +509,11 @@ with main_tab_build:
                                             # had already succeeded.
                         for idx, chunk in enumerate(chunks):
                             try:
+                                _t_chunk = time.perf_counter()
+                                logger.debug(
+                                    "Processing chunk %d/%d | chunk_id=%s | chars=%d",
+                                    idx + 1, total_chunks, chunk["chunk_id"], len(chunk["text"]),
+                                )
                                 embedding = generate_embedding(chunk["text"])
                                 store_chunk(
                                     chunk_id=f"{uploaded_file.name}_{chunk['chunk_id']}",
@@ -502,6 +534,13 @@ with main_tab_build:
                                     chunk["text"], prior_context=prior_chunk_text,
                                     continue_same_item=continue_same_item,
                                 )
+                                logger.debug(
+                                    "Chunk %d/%d extracted | chunk_id=%s | nodes=%d | rels=%d | dur=%.2fs",
+                                    idx + 1, total_chunks, chunk["chunk_id"],
+                                    len(graph_data.get("nodes", [])),
+                                    len(graph_data.get("relationships", [])),
+                                    time.perf_counter() - _t_chunk,
+                                )
                                 if graph_data.get("error"):
                                     st.warning(f"Chunk {idx+1} ({chunk['chunk_id']}) — {graph_data['error']}")
                                 if not graph_data.get("nodes") and not graph_data.get("relationships"):
@@ -517,6 +556,10 @@ with main_tab_build:
                                 all_relationships.extend(graph_data.get("relationships", []))
                                 prior_chunk_text = chunk["text"]
                             except Exception as chunk_err:
+                                logger.error(
+                                    "Chunk failed and was skipped | chunk_id=%s | idx=%d | error=%s",
+                                    chunk["chunk_id"], idx + 1, chunk_err,
+                                )
                                 failed_chunks.append({
                                     "item_id":  chunk["item_id"],
                                     "chunk_id": chunk["chunk_id"],
@@ -554,19 +597,23 @@ with main_tab_build:
                             "cross_reference_links": linked["summary"]["total_links"],
                             "broken_references": linked["summary"]["broken_references"],
                         }
+                        logger.info(
+                            "Entity extraction complete | raw_nodes=%d | raw_rels=%d | failed_chunks=%d | zero_chunks=%d",
+                            len(all_nodes), len(all_relationships),
+                            len(failed_chunks), len(zero_extraction_chunks),
+                        )
+                        _t_dedup = time.perf_counter()
                         (all_nodes, all_relationships,
                          type_conflicts, direction_conflicts) = deduplicate_graph(
                             all_nodes, all_relationships)
+                        logger.info(
+                            "Deduplication done | nodes=%d | rels=%d | type_conflicts=%d | dir_conflicts=%d | dur=%.2fs",
+                            len(all_nodes), len(all_relationships),
+                            len(type_conflicts), len(direction_conflicts),
+                            time.perf_counter() - _t_dedup,
+                        )
                         # Cross-requirement linking is disabled (feature removed from UI)
                         # ── Confidence Scorer ────────────────────────────────
-                        # Annotates every deduplicated node/relationship with a
-                        # "confidence" score + reasons, using occurrence counts
-                        # (deduplicate_graph's _occurrence_count), dedup conflict
-                        # signals, and Requirement Linker corroboration. Nothing
-                        # is removed here — low-confidence items are flagged
-                        # (low_confidence_nodes/relationships) for visibility,
-                        # not dropped; Graph Validator (next) still decides
-                        # schema validity independently.
                         scored = score_graph(
                             all_nodes, all_relationships,
                             type_conflicts, direction_conflicts,
@@ -594,7 +641,17 @@ with main_tab_build:
                         structure_report = evaluate_structure(
                             all_nodes, all_relationships, linked["items_with_links"]
                         )
+                        logger.info(
+                            "Building Neo4j graph | nodes=%d | rels=%d",
+                            len(all_nodes), len(all_relationships),
+                        )
+                        _t_build = time.perf_counter()
                         build_graph({"nodes": all_nodes, "relationships": all_relationships})
+                        logger.info(
+                            "Neo4j graph built successfully | nodes=%d | rels=%d | dur=%.2fs",
+                            len(all_nodes), len(all_relationships),
+                            time.perf_counter() - _t_build,
+                        )
                         st.cache_data.clear()
                         # ── Workflow layer (additive, non-breaking) ──────────
                         # Build WorkflowModel from already-extracted nodes/rels
@@ -617,6 +674,9 @@ with main_tab_build:
                                         "document. Workflow tab will show an empty state."
                                     )
                             except Exception as _wf_err:
+                                logger.warning(
+                                    "Workflow layer extraction skipped | error=%s", _wf_err
+                                )
                                 st.warning(
                                     f"Workflow layer extraction skipped: {_wf_err}\n"
                                     "The main graph is unaffected."
@@ -634,9 +694,16 @@ with main_tab_build:
                         # Automatically run community pipeline
                         with st.spinner("Analyzing graph structure (running community detection)..."):
                             try:
+                                _t_comm = time.perf_counter()
                                 comm_stats = run_full_community_detection()
                                 st.session_state["community_stats"] = comm_stats
+                                logger.info(
+                                    "Community detection complete | communities=%d | dur=%.2fs",
+                                    comm_stats.get("total_communities", 0),
+                                    time.perf_counter() - _t_comm,
+                                )
                             except Exception as comm_err:
+                                logger.error("Community detection failed | error=%s", comm_err)
                                 st.warning(f"Community detection failed: {comm_err}")
                         if st.session_state.get("community_stats", {}).get("success"):
                             with st.spinner("Generating community summaries..."):
@@ -648,11 +715,20 @@ with main_tab_build:
                                             hierarchy = build_full_hierarchy(summary_results["summaries"])
                                             st.session_state["hierarchy"] = hierarchy
                                 except Exception as summ_err:
+                                    logger.error(
+                                        "Community summarization/hierarchy failed | error=%s", summ_err
+                                    )
                                     st.warning(f"Community summarization/hierarchy build failed: {summ_err}")
 
                         progress_bar.empty()
 
+                        _t_pipeline_dur = time.perf_counter() - _t_pipeline_start
+                        logger.info(
+                            "Build Index pipeline complete | file=%s | total_dur=%.2fs",
+                            uploaded_file.name, _t_pipeline_dur,
+                        )
                     except Exception as e:
+                        logger.exception("Build Index pipeline failed | error=%s", e)
                         st.error(f"Error: {str(e)}")
 
         st.divider()

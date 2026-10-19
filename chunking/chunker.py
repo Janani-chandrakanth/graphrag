@@ -5,8 +5,12 @@ Auto-detecting structural and semantic text chunker for requirement items,
 user stories, test cases, and generic document sections.
 """
 
+import logging
 import re
+import time
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+logger = logging.getLogger(__name__)
 
 
 # ── Chunk size limits ──────────────────────────────────────
@@ -178,10 +182,13 @@ def create_chunks(text: str) -> list:
     Returns:
         list of chunk strings + detection metadata in session info
     """
+    _t0 = time.perf_counter()
+    char_count = len(text) if text else 0
     all_chunks   = []
     detected     = detect_document_type(text)
 
     if detected:
+        strategy = "pattern-based"
         # Pattern-based chunking — split by each detected type
         for item in detected:
             pattern_name = item["pattern_name"]
@@ -206,11 +213,17 @@ def create_chunks(text: str) -> list:
     else:
         # No patterns detected — LangChain semantic fallback
         # Works for any free-form document
+        strategy = "semantic-fallback"
         all_chunks = splitter.split_text(text)
 
     # Final pass — split anything still too large
     all_chunks = split_large_chunks(all_chunks)
 
+    dur = time.perf_counter() - _t0
+    logger.info(
+        "Text chunking complete | chars=%d | chunks=%d | strategy=%s | dur=%.3fs",
+        char_count, len(all_chunks), strategy, dur,
+    )
     return all_chunks
 
 
@@ -258,7 +271,10 @@ def create_chunks_from_items(items_with_links: list) -> list:
             ...
         ]
     """
+    _t0 = time.perf_counter()
     result = []
+    split_count = 0
+    total_chars = 0
 
     for item in items_with_links:
         item_id = item.get("id")
@@ -267,20 +283,12 @@ def create_chunks_from_items(items_with_links: list) -> list:
         content = (item.get("content") or "").strip()
 
         if not content:
-            # An item with genuinely empty content produces an empty
-            # chunk, which produces an empty/degenerate embedding
-            # request, which is what crashes ChromaDB's upsert with
-            # "list index out of range" further down the pipeline —
-            # not a weak signal to flag, just nothing to chunk at all.
-            # Skip rather than emit a hollow chunk. In the normal case
-            # this should already be prevented upstream (Pass B now
-            # rejects empty descriptions before creating a GEN item),
-            # so hitting this is itself worth investigating if it
-            # happens often.
             continue
 
+        total_chars += len(content)
         if len(content) > MAX_CHUNK_SIZE:
             sub_chunks = splitter.split_text(content)
+            split_count += 1
             for i, sub_text in enumerate(sub_chunks, start=1):
                 result.append({
                     "chunk_id": f"{item_id}#{i}",
@@ -300,6 +308,11 @@ def create_chunks_from_items(items_with_links: list) -> list:
                 "is_split": False,
             })
 
+    dur = time.perf_counter() - _t0
+    logger.info(
+        "Structured item chunking complete | items=%d | chunks=%d | splits=%d | chars=%d | dur=%.3fs",
+        len(items_with_links), len(result), split_count, total_chars, dur,
+    )
     return result
 
 

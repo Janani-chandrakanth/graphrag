@@ -7,25 +7,42 @@ Manages two collections:
 
 import chromadb
 import json
+import logging
+import time
 import requests
 from config import OLLAMA_EMBED_URL, EMBED_MODEL
+
+logger = logging.getLogger(__name__)
 
 
 def generate_embedding(text):
     """
     Embedding generation via Ollama /api/embeddings.
     """
+    _t = time.perf_counter()
     payload = {
         "model": EMBED_MODEL,
         "prompt": text
     }
-    response = requests.post(
-        OLLAMA_EMBED_URL,
-        json=payload,
-        proxies={"http": None, "https": None}
-    )
-    response.raise_for_status()
-    return response.json()["embedding"]
+    try:
+        response = requests.post(
+            OLLAMA_EMBED_URL,
+            json=payload,
+            proxies={"http": None, "https": None}
+        )
+        response.raise_for_status()
+        embedding = response.json()["embedding"]
+        logger.debug(
+            "Embedding generated | model=%s | text_chars=%d | vector_dim=%d | dur=%.3fs",
+            EMBED_MODEL, len(text), len(embedding), time.perf_counter() - _t,
+        )
+        return embedding
+    except Exception as exc:
+        logger.error(
+            "Embedding generation failed | model=%s | text_chars=%d | error=%s",
+            EMBED_MODEL, len(text), exc,
+        )
+        raise
 
 
 client = chromadb.PersistentClient(path="./chroma_db")
@@ -62,13 +79,21 @@ def store_chunk(chunk_id, chunk_text, embedding, metadata=None):
         upsert_kwargs["metadatas"] = [flat_metadata]
 
     chunks_collection.upsert(**upsert_kwargs)
+    logger.debug("Chunk stored | chunk_id=%s | text_chars=%d", chunk_id, len(chunk_text))
 
 
 def search_chunks(query_embedding, n_results=5):
-    return chunks_collection.query(
+    _t = time.perf_counter()
+    results = chunks_collection.query(
         query_embeddings=[query_embedding],
         n_results=n_results
     )
+    returned = len((results.get("ids") or [[]])[0])
+    logger.debug(
+        "Vector search complete | collection=requirements_chunks | n_results=%d | returned=%d | dur=%.3fs",
+        n_results, returned, time.perf_counter() - _t,
+    )
+    return results
 
 
 def get_collection_count():

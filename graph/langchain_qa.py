@@ -5,10 +5,15 @@ Natural language graph QA using LangChain's GraphCypherQAChain to translate
 questions into Cypher queries, execute them on Neo4j, and synthesize answers.
 """
 
+import logging
+import time
+
 from langchain_neo4j import Neo4jGraph, GraphCypherQAChain
 from langchain_ollama import ChatOllama
 
 from config import NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_DATABASE, OLLAMA_URL, EXTRACTION_MODEL
+
+logger = logging.getLogger(__name__)
 
 _CYPHER_GENERATION_TEMPLATE = """Task: Generate a Cypher statement to query a graph database.
 Instructions:
@@ -101,6 +106,9 @@ def _get_entity_embeddings() -> dict:
         except Exception:
             continue  # one bad embedding call shouldn't block the rest
     _entity_embedding_cache = cache
+    logger.debug(
+        "Entity embedding cache built | node_count=%d", len(cache)
+    )
     return cache
 
 
@@ -126,7 +134,12 @@ def _semantic_entity_link(question: str, top_k: int = 8, min_similarity: float =
         for node_id, (name, node_type, emb) in cache.items()
     ]
     scored.sort(key=lambda t: t[3], reverse=True)
-    return [s for s in scored if s[3] >= min_similarity][:top_k]
+    result = [s for s in scored if s[3] >= min_similarity][:top_k]
+    logger.debug(
+        "Semantic entity link | question_chars=%d | top_k=%d | matched=%d",
+        len(question), top_k, len(result),
+    )
+    return result
 
 
 def _build_entity_hint(question: str) -> str:
@@ -290,9 +303,16 @@ def _run_chain_once(question: str) -> dict:
     the real question, not a replacement for it."""
     hinted_question = _build_entity_hint(question)
     try:
+        _t = time.perf_counter()
         chain = _get_chain()
+        logger.debug(
+            "LLM Cypher chain invoke | model=%s | question_chars=%d",
+            EXTRACTION_MODEL, len(question),
+        )
         response = chain.invoke({"query": hinted_question})
+        dur = time.perf_counter() - _t
     except Exception as e:
+        logger.error("LLM chain invocation failed | error=%s", e)
         return {"answer": "", "cypher": "", "result": [], "error": str(e)}
 
     steps = response.get("intermediate_steps", [])
@@ -305,6 +325,10 @@ def _run_chain_once(question: str) -> dict:
             if "context" in step:
                 result_rows = step["context"]
 
+    logger.info(
+        "Cypher chain complete | rows=%d | dur=%.2fs | cypher_len=%d",
+        len(result_rows), dur, len(cypher),
+    )
     return {
         "answer": response.get("result", ""),
         "cypher": cypher,
@@ -335,22 +359,39 @@ def ask_graph(question: str) -> dict:
          requirements_chunks ChromaDB collection instead of a hard
          "nothing found."
     """
+    logger.info("Ask Graph | question_chars=%d", len(question))
+    _t_total = time.perf_counter()
     first = _run_chain_once(question)
     if first["error"] or first["result"]:
         first["source"] = "graph"
         first["reformulated_question"] = None
+        logger.info(
+            "Ask Graph answered | source=graph | rows=%d | dur=%.2fs",
+            len(first["result"]), time.perf_counter() - _t_total,
+        )
         return first
 
+    logger.debug("Ask Graph: direct query returned 0 rows, reformulating")
     reformulated_question = _reformulate(question)
     if reformulated_question.strip().lower() != question.strip().lower():
+        logger.debug("Ask Graph: retrying with reformulated question")
         second = _run_chain_once(reformulated_question)
         if second["error"] or second["result"]:
             second["source"] = "graph_reformulated"
             second["reformulated_question"] = reformulated_question
+            logger.info(
+                "Ask Graph answered | source=graph_reformulated | rows=%d | dur=%.2fs",
+                len(second["result"]), time.perf_counter() - _t_total,
+            )
             return second
 
+    logger.debug("Ask Graph: graph exhausted, falling back to vector search")
     fallback = _vector_fallback(question)
     if fallback["used"] and not fallback["error"]:
+        logger.info(
+            "Ask Graph answered | source=vector_fallback | chunks=%d | dur=%.2fs",
+            len(fallback["chunks"]), time.perf_counter() - _t_total,
+        )
         return {
             "answer": fallback["answer"],
             "cypher": "",
@@ -360,6 +401,10 @@ def ask_graph(question: str) -> dict:
             "reformulated_question": reformulated_question,
         }
 
+    logger.warning(
+        "Ask Graph: no answer found in graph or vector store | dur=%.2fs",
+        time.perf_counter() - _t_total,
+    )
     # Nothing worked -- return the original graph attempt's (empty)
     # response so the UI shows the honest "no answer" state, same as
     # before this change, rather than swallowing the fallback's error.

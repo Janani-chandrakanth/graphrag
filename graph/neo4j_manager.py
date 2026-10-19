@@ -6,9 +6,13 @@ SessionExpired errors are caught and the driver is recreated.
 """
 
 import json
+import logging
+import time
 from neo4j import GraphDatabase
 from neo4j.exceptions import SessionExpired, ServiceUnavailable
 from config import NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
+
+logger = logging.getLogger(__name__)
 
 
 # ── Driver with reconnection support ──────────────────────
@@ -58,9 +62,14 @@ def _run_with_retry(fn, retries=2):
             with d.session() as session:
                 return fn(session)
         except (SessionExpired, ServiceUnavailable):
+            logger.warning(
+                "Neo4j session expired/unavailable | attempt=%d/%d | recreating driver",
+                attempt + 1, retries,
+            )
             # Recreate driver and retry
             driver = _create_driver()
             if attempt == retries - 1:
+                logger.error("Neo4j connection failed after %d retries", retries)
                 raise  # re-raise on last attempt
     return None
 
@@ -195,7 +204,9 @@ def clear_graph():
         record = result.single()
         return record["deleted"] if record else 0
 
+    _t = time.perf_counter()
     deleted = _run_with_retry(fn) or 0
+    logger.info("Neo4j graph cleared | deleted_nodes=%d | dur=%.2fs", deleted, time.perf_counter() - _t)
     return {"deleted": deleted}
 
 
@@ -244,7 +255,13 @@ def run_cypher_query(query: str, parameters: dict = None) -> list:
         result = session.run(query, params)
         return [dict(record) for record in result]
 
-    return _run_with_retry(fn) or []
+    _t = time.perf_counter()
+    rows = _run_with_retry(fn) or []
+    logger.debug(
+        "Neo4j Cypher query | rows=%d | dur=%.3fs | query_chars=%d",
+        len(rows), time.perf_counter() - _t, len(query),
+    )
+    return rows
 
 
 def get_stored_documents() -> list:

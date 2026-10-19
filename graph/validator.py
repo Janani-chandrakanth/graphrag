@@ -1,4 +1,8 @@
 # graph/validator.py
+import logging
+import time
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_RELATIONS = {
     "USES",
@@ -279,6 +283,7 @@ def validate_graph(nodes, relationships):
         review_relationships: [{"relationship": rel, "reasons": [str, ...]}, ...]
     """
 
+    _t0 = time.perf_counter()
     valid_nodes = []
     review_nodes = []
 
@@ -341,4 +346,9 @@ def validate_graph(nodes, relationships):
                 still_valid.append(rel)
         valid_relationships = still_valid
 
+    dur = time.perf_counter() - _t0
+    logger.info(
+        "validate_graph complete | nodes_in=%d | valid_nodes=%d | review_nodes=%d | rels_in=%d | valid_rels=%d | review_rels=%d | dur=%.3fs",
+        len(nodes), len(valid_nodes), len(review_nodes), len(relationships), len(valid_relationships), len(review_relationships), dur,
+    )
     return valid_nodes, valid_relationships, review_nodes, review_relationships

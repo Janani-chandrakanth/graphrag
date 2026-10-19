@@ -8,7 +8,9 @@ Consolidated Community Engine:
 """
 
 import json
+import logging
 import math
+import time
 import requests
 import networkx as nx
 
@@ -32,6 +34,8 @@ from graph.neo4j_manager import (
     get_all_communities_db,
     write_community_ids
 )
+
+logger = logging.getLogger(__name__)
 
 
 # =========================================================
@@ -107,9 +111,12 @@ def run_full_community_detection() -> dict:
     2. Run Louvain detection
     3. Write community IDs back to Neo4j
     """
+    logger.info("Community detection starting")
+    _t = time.perf_counter()
     G = build_graph_from_neo4j()
 
     if len(G.nodes()) == 0:
+        logger.warning("Community detection: no nodes found in Neo4j")
         return {
             "success":           False,
             "error":             "No nodes found in Neo4j. Build the index first.",
@@ -118,6 +125,10 @@ def run_full_community_detection() -> dict:
 
     partition = detect_communities(G)
     stats     = write_community_ids(partition)
+    logger.info(
+        "Community detection complete | nodes=%d | communities=%d | dur=%.2fs",
+        len(G.nodes()), stats.get("total_communities", 0), time.perf_counter() - _t,
+    )
     return stats
 
 
@@ -212,6 +223,7 @@ def summarize_community(community_id: int) -> dict:
 
     try:
         # Direct HTTP call — avoids Ollama SDK proxy issue
+        _t_llm = time.perf_counter()
         response = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json={
@@ -224,6 +236,10 @@ def summarize_community(community_id: int) -> dict:
         )
         response.raise_for_status()
         summary = response.json()["response"].strip()
+        logger.debug(
+            "Community %d summarised | nodes=%d | rels=%d | llm_dur=%.2fs",
+            community_id, len(nodes), len(relationships), time.perf_counter() - _t_llm,
+        )
 
         # Embed the summary
         embedding = generate_embedding(summary)
@@ -240,18 +256,21 @@ def summarize_community(community_id: int) -> dict:
         }
 
     except requests.exceptions.ConnectionError as e:
+        logger.error("Community %d summarization: cannot reach Ollama | error=%s", community_id, e)
         return {
             "community_id": community_id,
             "success":      False,
             "error":        f"Cannot reach Ollama server: {str(e)}"
         }
     except requests.exceptions.Timeout:
+        logger.error("Community %d summarization: Ollama request timed out", community_id)
         return {
             "community_id": community_id,
             "success":      False,
             "error":        "Ollama request timed out (120s)"
         }
     except Exception as e:
+        logger.exception("Community %d summarization failed | error=%s", community_id, e)
         return {
             "community_id": community_id,
             "success":      False,
@@ -305,6 +324,10 @@ def summarize_all_communities() -> dict:
             })
             failed += 1
 
+    logger.info(
+        "Community summarization complete | total=%d | successful=%d | failed=%d",
+        len(all_communities), successful, failed,
+    )
     return {
         "total_communities": len(all_communities),
         "successful":        successful,

@@ -4,6 +4,10 @@ graph/flow_graph_analysis.py
 Performs procedural control-flow analysis on sequence relationships, computing
 depth-first spanning trees, dominator sets, and natural loop detections.
 """
+import logging
+import time
+
+logger = logging.getLogger(__name__)
 
 # Relation types that denote an actual state/action transition — "this
 # happens, then that happens" — as opposed to a structural,
@@ -304,6 +308,7 @@ def analyze_flow(nodes: list, relationships: list, entry_ids: list = None) -> di
             "entry node 1" is stated up front, not computed) can supply
             it directly instead of going through the heuristic.
     """
+    _t0 = time.perf_counter()
     adj = _build_flow_adjacency(nodes, relationships)
     preds = _predecessors(adj)
     in_flow_subgraph = {nid for nid in adj if adj[nid] or preds[nid]}
@@ -354,7 +359,7 @@ def analyze_flow(nodes: list, relationships: list, entry_ids: list = None) -> di
 
     sequence_order = [nid for nid in sorted(dfn, key=lambda k: dfn[k]) if nid in in_flow_subgraph]
 
-    return {
+    res = {
         "entry_ids": entries,
         "entry_is_guessed": entry_is_guessed,
         "dfn": dfn,
@@ -364,6 +369,12 @@ def analyze_flow(nodes: list, relationships: list, entry_ids: list = None) -> di
         "in_flow_subgraph": in_flow_subgraph,
         "dominators": dominators,
     }
+    dur = time.perf_counter() - _t0
+    logger.debug(
+        "Flow analysis complete | nodes=%d | flow_nodes=%d | entries=%d | loops=%d | dur=%.3fs",
+        len(nodes), len(in_flow_subgraph), len(entries), len(natural_loops), dur,
+    )
+    return res
 
 
 def analyze_flow_detailed(nodes: list, relationships: list, entry_ids: list = None) -> dict:
@@ -371,6 +382,7 @@ def analyze_flow_detailed(nodes: list, relationships: list, entry_ids: list = No
     Performs detailed workflow analysis including per-actor flow separation,
     isolated node classification with explanations, branches/merges, and health metrics.
     """
+    _t_detailed = time.perf_counter()
     flow_analysis = analyze_flow(nodes, relationships, entry_ids)
     
     # 1. Adjacency for flow and full graph
@@ -538,6 +550,11 @@ def analyze_flow_detailed(nodes: list, relationships: list, entry_ids: list = No
         ]
     }
         
+    dur_detailed = time.perf_counter() - _t_detailed
+    logger.info(
+        "Detailed flow analysis complete | actor_flows=%d | isolated=%d | branches=%d | merges=%d | health=%s | dur=%.3fs",
+        len(actor_flows), len(isolated_nodes), len(branches), len(merges), health, dur_detailed,
+    )
     return {
         "connected_components_count": cc_count,
         "isolated_nodes": isolated_nodes,

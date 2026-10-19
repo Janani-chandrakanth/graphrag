@@ -8,9 +8,16 @@ consistently with the rest of the project instead of introducing a
 second calling convention.
 """
 import json
+import logging
+import time
 import requests
 from config import OLLAMA_URL
+
+logger = logging.getLogger(__name__)
+
 MODEL = "llama3.1:latest"
+
+
 def call_ollama(prompt: str, timeout: int = 120, num_ctx: int = 8192, model: str = None, base_url: str = None) -> dict:
     """
     Call Ollama's /api/generate with the project's standard deterministic
@@ -38,7 +45,10 @@ def call_ollama(prompt: str, timeout: int = 120, num_ctx: int = 8192, model: str
     """
     target_url = base_url or OLLAMA_URL
     target_model = model or MODEL
-    
+    _t0 = time.perf_counter()
+
+    logger.debug("LLM request start | model=%s | host=%s", target_model, target_url)
+
     # Try primary endpoint with a fast connect timeout (3s) to detect unreachable remote hosts
     try:
         response = requests.post(
@@ -59,11 +69,17 @@ def call_ollama(prompt: str, timeout: int = 120, num_ctx: int = 8192, model: str
             timeout=(3, timeout)
         )
         response.raise_for_status()
+        dur = time.perf_counter() - _t0
+        logger.info("LLM request succeeded | model=%s | host=%s | dur=%.2fs", target_model, target_url, dur)
         return {"raw": response.json()["response"], "error": None}
     except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as primary_err:
         # Fallback to local Ollama if primary remote URL is unreachable
         local_url = "http://localhost:11434"
         if target_url != local_url:
+            logger.warning(
+                "Primary Ollama unreachable at %s (%s); trying local fallback | dur=%.2fs",
+                target_url, primary_err, time.perf_counter() - _t0
+            )
             try:
                 tag_resp = requests.get(f"{local_url}/api/tags", timeout=2)
                 if tag_resp.status_code == 200:
@@ -81,15 +97,25 @@ def call_ollama(prompt: str, timeout: int = 120, num_ctx: int = 8192, model: str
                         timeout=timeout
                     )
                     fallback_resp.raise_for_status()
+                    dur = time.perf_counter() - _t0
+                    logger.info("LLM fallback request succeeded | model=%s | host=%s | dur=%.2fs", local_model, local_url, dur)
                     return {"raw": fallback_resp.json()["response"], "error": None}
-            except Exception:
-                pass
+            except Exception as fb_exc:
+                logger.warning("Local fallback Ollama failed: %s", fb_exc)
+        dur = time.perf_counter() - _t0
+        logger.error("LLM request failed (unreachable) | model=%s | host=%s | dur=%.2fs", target_model, target_url, dur)
         return {"raw": "", "error": f"Cannot reach Ollama server at {target_url}: {str(primary_err)}"}
     except requests.exceptions.Timeout:
+        dur = time.perf_counter() - _t0
+        logger.error("LLM request timed out | model=%s | host=%s | timeout=%ds | dur=%.2fs", target_model, target_url, timeout, dur)
         return {"raw": "", "error": f"Ollama request to {target_url} timed out ({timeout}s)"}
     except requests.exceptions.HTTPError as e:
+        dur = time.perf_counter() - _t0
+        logger.error("LLM request HTTP error | model=%s | host=%s | err=%s | dur=%.2fs", target_model, target_url, str(e), dur)
         return {"raw": "", "error": f"Ollama request to {target_url} failed: {str(e)} — check the model is actually pulled on that server"}
     except Exception as e:
+        dur = time.perf_counter() - _t0
+        logger.error("LLM request failed | model=%s | host=%s | err=%s | dur=%.2fs", target_model, target_url, str(e), dur)
         return {"raw": "", "error": f"Ollama request to {target_url} failed: {str(e)}"}
 def extract_json_block(raw_output: str):
     """

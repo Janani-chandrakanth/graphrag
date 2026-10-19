@@ -5,12 +5,16 @@ Coordinates incremental graph merging: entity matching, structural conflict dete
 graph validation, and user-directed workflow preservation.
 """
 
+import logging
 import math
+import time
 
 from graph.deduplicator import normalize_id, TYPE_PRIORITY
 from graph.neo4j_manager import insert_graph_with_batch, delete_relationships
 from vectorstore.chroma_manager import generate_embedding
 from parser.llm_client import call_ollama
+
+logger = logging.getLogger(__name__)
 from config import EXTRACTION_MODEL, EXTRACTION_MODEL_URL
 
 # Above this cosine similarity, two nodes are treated as the same
@@ -310,6 +314,11 @@ def build_merge_plan(new_nodes: list, new_relationships: list,
     one plan for the UI to review. Nothing is written to Neo4j here --
     see apply_merge_plan().
     """
+    _t0 = time.perf_counter()
+    logger.info(
+        "build_merge_plan start | new_nodes=%d | new_rels=%d | existing_nodes=%d | existing_rels=%d",
+        len(new_nodes), len(new_relationships), len(existing_nodes), len(existing_relationships),
+    )
     id_remap, match_report, unmatched_new = match_entities(
         new_nodes, existing_nodes, use_llm_verification=use_llm_verification
     )
@@ -330,6 +339,20 @@ def build_merge_plan(new_nodes: list, new_relationships: list,
         list(merged_nodes_preview.values()), merged_rels_preview
     )
 
+    stats = {
+        "new_nodes_total": len(new_nodes),
+        "matched_existing": len(match_report),
+        "genuinely_new": len(unmatched_new),
+        "relationships_added": len(rels_to_add),
+        "relationships_removed": len(rels_to_remove),
+        "conflicts_detected": len(conflicts),
+    }
+    dur = time.perf_counter() - _t0
+    logger.info(
+        "build_merge_plan complete | matched=%d | genuinely_new=%d | rels_to_add=%d | rels_to_remove=%d | conflicts=%d | dur=%.2fs",
+        len(match_report), len(unmatched_new), len(rels_to_add), len(rels_to_remove), len(conflicts), dur,
+    )
+
     return {
         "match_report": match_report,
         "unmatched_new_nodes": unmatched_new,
@@ -338,14 +361,7 @@ def build_merge_plan(new_nodes: list, new_relationships: list,
         "relationships_to_add": rels_to_add,
         "relationships_to_remove": rels_to_remove,
         "validation_report": validation_report,
-        "stats": {
-            "new_nodes_total": len(new_nodes),
-            "matched_existing": len(match_report),
-            "genuinely_new": len(unmatched_new),
-            "relationships_added": len(rels_to_add),
-            "relationships_removed": len(rels_to_remove),
-            "conflicts_detected": len(conflicts),
-        },
+        "stats": stats,
     }
 
 
@@ -364,6 +380,13 @@ def apply_merge_plan(plan: dict, batch_id: str):
     graph/version_manager.snapshot_current_graph() BEFORE this, so the
     pre-merge state is retained as a version first.
     """
+    logger.info(
+        "apply_merge_plan | upserting_nodes=%d | rels_to_add=%d | rels_to_remove=%d | batch_id=%s",
+        len(plan.get("nodes_to_upsert", [])),
+        len(plan.get("relationships_to_add", [])),
+        len(plan.get("relationships_to_remove", [])),
+        batch_id,
+    )
     insert_graph_with_batch(plan["nodes_to_upsert"], plan["relationships_to_add"], batch_id)
     if plan["relationships_to_remove"]:
         delete_relationships(plan["relationships_to_remove"])

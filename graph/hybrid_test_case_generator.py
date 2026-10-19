@@ -1,6 +1,10 @@
 import hashlib
 import json
+import logging
+import time
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from parser.llm_client import call_ollama, extract_json_block
 from prompts.prompt_library import get_prompt as _get_library_prompt
@@ -370,12 +374,17 @@ def write_test_cases_to_graph(test_cases: list, nodes: list) -> dict:
         )
     ]
 
-    return {
+    result = {
         "test_case_nodes_written": len(tc_nodes),
         "validates_edges_written": validates_count,
         "verifies_edges_written": verifies_count,
         "test_cases_with_no_resolved_edges": unresolved,
     }
+    logger.info(
+        "Wrote test cases to graph | tc_nodes=%d | validates_edges=%d | verifies_edges=%d | unresolved=%d",
+        len(tc_nodes), validates_count, verifies_count, len(unresolved),
+    )
+    return result
 
 
 # ── Hybrid Test Case Generator Main ──────────────────────────────────────────
@@ -389,6 +398,11 @@ def generate_hybrid_test_cases(
     model: str = None,
     prompt_name: str = "hybrid_flow",
 ) -> dict:
+    _t0 = time.perf_counter()
+    logger.info(
+        "generate_hybrid_test_cases start | nodes=%d | rels=%d | prompt=%s",
+        len(nodes), len(relationships), prompt_name,
+    )
     links = links or []
     chunks = chunks or []
     if not items_with_links:
@@ -600,6 +614,16 @@ def generate_hybrid_test_cases(
             test_cases.append({**skeleton, "llm_derived": False})
 
     text = "\n\n".join(_render_test_case_text(tc) for tc in test_cases)
+    dur = time.perf_counter() - _t0
+    logger.info(
+        "generate_hybrid_test_cases complete | total=%d | positive=%d | negative=%d | edge=%d | llm_derived=%d | dur=%.2fs",
+        len(test_cases),
+        sum(1 for tc in test_cases if tc["type"] == "Positive"),
+        sum(1 for tc in test_cases if tc["type"] == "Negative"),
+        sum(1 for tc in test_cases if tc["type"] == "Edge"),
+        sum(1 for tc in test_cases if tc.get("llm_derived")),
+        dur,
+    )
 
     return {
         "test_cases": test_cases,

@@ -16,10 +16,15 @@ New code (Document Type Detector, Template Normalizer, etc.) should call
 just the flattened Markdown string.
 """
 
+import logging
+import time
+
 from parser.normalization import DocumentStructure
 from parser.extractors import extract_docx_structure
 from parser.extractors import extract_pdf_structure
 from parser.extractors import extract_txt_structure
+
+logger = logging.getLogger(__name__)
 
 
 def parse_document(uploaded_file) -> DocumentStructure:
@@ -36,15 +41,24 @@ def parse_document(uploaded_file) -> DocumentStructure:
     """
     filename = getattr(uploaded_file, "name", "document")
     extension = filename.split(".")[-1].lower()
+    logger.info("Parsing document | file=%s | extension=%s", filename, extension)
+    _t = time.perf_counter()
 
     if extension == "docx":
-        return extract_docx_structure(uploaded_file, filename)
+        result = extract_docx_structure(uploaded_file, filename)
     elif extension == "pdf":
-        return extract_pdf_structure(uploaded_file, filename)
+        result = extract_pdf_structure(uploaded_file, filename)
     elif extension == "txt":
-        return extract_txt_structure(uploaded_file, filename)
+        result = extract_txt_structure(uploaded_file, filename)
     else:
+        logger.error("Unsupported file type | file=%s | extension=%s", filename, extension)
         raise ValueError(f"Unsupported file type: {extension}")
+
+    logger.info(
+        "Document parsed | file=%s | extension=%s | dur=%.2fs",
+        filename, extension, time.perf_counter() - _t,
+    )
+    return result
 
 
 def extract_text(uploaded_file) -> str:

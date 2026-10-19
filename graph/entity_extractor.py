@@ -1,5 +1,7 @@
 import json
+import logging
 import re
+import time
 import requests
 from collections import defaultdict
 from pydantic import ValidationError
@@ -14,6 +16,8 @@ from config import (
     WORKFLOW_MODEL,
     WORKFLOW_MODEL_URL,
 )
+
+logger = logging.getLogger(__name__)
 
 METADATA_HEADER_KEYWORDS = {
     "version", "revision", "document control", "change description", "author",
@@ -450,7 +454,7 @@ def extract_workflow_sequence(requirements_text: str, extracted_nodes: list) -> 
         return {"sequences": clean_sequences, "error": None}
 
     except Exception as e:
-        print(f"Error parsing sequence extraction JSON: {e}")
+        logger.error("Error parsing sequence extraction JSON | error=%s", e)
         return {"sequences": [], "error": f"Error parsing JSON: {e}"}
 
 
@@ -551,6 +555,11 @@ def extract_entities(requirement_text: str, prior_context: str = None,
             requirement_text
         )
 
+    _t_llm = time.perf_counter()
+    logger.debug(
+        "Entity extraction LLM call | model=%s | text_chars=%d | has_prior=%s | continue_same=%s",
+        EXTRACTION_MODEL, len(requirement_text), prior_context is not None, continue_same_item,
+    )
     result = call_ollama(
         prompt,
         timeout=120,
@@ -559,11 +568,19 @@ def extract_entities(requirement_text: str, prior_context: str = None,
         base_url=EXTRACTION_MODEL_URL,
     )
     if result["error"]:
+        logger.error(
+            "Entity extraction LLM failed | model=%s | text_chars=%d | error=%s",
+            EXTRACTION_MODEL, len(requirement_text), result["error"],
+        )
         return {
             "nodes": [], "relationships": [],
             "error": result["error"],
             "raw_output": ""
         }
+    logger.debug(
+        "Entity extraction LLM returned | dur=%.2fs | output_chars=%d",
+        time.perf_counter() - _t_llm, len(result.get("raw", "")),
+    )
     output = result["raw"]
 
     try:
@@ -709,12 +726,14 @@ def extract_entities(requirement_text: str, prior_context: str = None,
         }
 
     except json.JSONDecodeError as e:
+        logger.error("Entity extraction JSON parse error | error=%s", e)
         return {
             "nodes": [], "relationships": [],
             "error": f"JSON parse error: {str(e)}",
             "raw_output": output
         }
     except Exception as e:
+        logger.exception("Entity extraction unexpected error | error=%s", e)
         return {
             "nodes": [], "relationships": [],
             "error": f"Unexpected error: {str(e)}",

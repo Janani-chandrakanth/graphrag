@@ -10,6 +10,7 @@ Consolidated test case evaluation coordinator, metric aggregator, LLM bridge, an
 
 import json
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -102,6 +103,8 @@ def invoke_llm_for_judgment(
     if not test_cases:
         return []
 
+    _t0 = time.perf_counter()
+    logger.info("invoke_llm_for_judgment start | test_cases=%d | batch_size=%d", len(test_cases), _BATCH_SIZE)
     judgments: List[Dict[str, Any]] = []
 
     for i in range(0, len(test_cases), _BATCH_SIZE):
@@ -122,6 +125,10 @@ def invoke_llm_for_judgment(
         except Exception as e:
             logger.warning("Error getting LLM judgment for batch %d: %s", i, e)
 
+    logger.info(
+        "invoke_llm_for_judgment complete | test_cases=%d | judgments_received=%d | dur=%.2fs",
+        len(test_cases), len(judgments), time.perf_counter() - _t0,
+    )
     return judgments
 
 
@@ -371,6 +378,12 @@ def evaluate_test_cases(
         }
         return empty_res
 
+    _t0 = time.perf_counter()
+    logger.info(
+        "evaluate_test_cases start | test_cases=%d | nodes=%d | rels=%d | scope=%s | doc=%s | use_llm=%s",
+        len(test_cases), len(graph_nodes), len(graph_relationships), scope, document_id, use_llm,
+    )
+
     # 1. Preprocess & Deduplicate
     preprocessed = preprocess_test_cases(test_cases)
     dedup = deduplicate_test_cases(preprocessed)
@@ -417,6 +430,15 @@ def evaluate_test_cases(
     except Exception as e:
         logger.warning("Could not save TestCaseEvaluationRun to Neo4j: %s", e)
 
+    dur = time.perf_counter() - _t0
+    logger.info(
+        "evaluate_test_cases complete | overall_cov=%.2f%% | node_cov=%.2f%% | edge_cov=%.2f%% | flow_correct=%.2f%% | dur=%.2fs",
+        report.get("overall_coverage", 0.0),
+        report.get("summary", {}).get("node_coverage", 0.0),
+        report.get("summary", {}).get("edge_coverage", 0.0),
+        report.get("summary", {}).get("flow_correctness", 0.0),
+        dur,
+    )
     return report
 
 

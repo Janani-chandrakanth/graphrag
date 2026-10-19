@@ -5,10 +5,14 @@ Manages versioning and snapshots for knowledge graphs, persisting pre-update gra
 """
 
 import json
+import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
 from graph.neo4j_manager import get_all_nodes, get_all_relationships, run_write_query, run_read_query
+
+logger = logging.getLogger(__name__)
 
 
 def new_version_id() -> str:
@@ -61,6 +65,10 @@ def snapshot_current_graph(label: str, description: str = "", source_filename: s
             prev_id=prev["id"], new_id=version_id,
         )
 
+    logger.info(
+        "Snapshot graph version created | id=%s | label=%s | nodes=%d | rels=%d",
+        version_id, label, len(nodes), len(relationships),
+    )
     # Don't leak the (potentially large) JSON blobs back to the caller
     # by default -- callers that render a version list only need the
     # metadata, same shape as list_versions() below.
@@ -138,6 +146,7 @@ def diff_graphs(version_a: dict, version_b: dict) -> dict:
     """
     version_a = older/base version, version_b = newer/comparison version.
     """
+    _t0 = time.perf_counter()
     nodes_a = {n["id"]: n for n in version_a.get("nodes", [])}
     nodes_b = {n["id"]: n for n in version_b.get("nodes", [])}
 
@@ -171,6 +180,19 @@ def diff_graphs(version_a: dict, version_b: dict) -> dict:
         if key in flow_a and flow_a[key] != flow_b[key]
     ]
 
+    summary = {
+        "added_nodes": len(added_nodes),
+        "removed_nodes": len(removed_nodes),
+        "modified_nodes": len(modified_nodes),
+        "added_relationships": len(added_rels),
+        "removed_relationships": len(removed_rels),
+        "changed_workflow": len(changed_workflow),
+    }
+    dur = time.perf_counter() - _t0
+    logger.info(
+        "diff_graphs complete | vA_nodes=%d | vB_nodes=%d | added_nodes=%d | removed_nodes=%d | modified_nodes=%d | added_rels=%d | dur=%.3fs",
+        len(nodes_a), len(nodes_b), len(added_nodes), len(removed_nodes), len(modified_nodes), len(added_rels), dur,
+    )
     return {
         "added_nodes": added_nodes,
         "removed_nodes": removed_nodes,
@@ -178,13 +200,6 @@ def diff_graphs(version_a: dict, version_b: dict) -> dict:
         "added_relationships": added_rels,
         "removed_relationships": removed_rels,
         "changed_workflow": changed_workflow,
-        "summary": {
-            "added_nodes": len(added_nodes),
-            "removed_nodes": len(removed_nodes),
-            "modified_nodes": len(modified_nodes),
-            "added_relationships": len(added_rels),
-            "removed_relationships": len(removed_rels),
-            "changed_workflow": len(changed_workflow),
-        },
+        "summary": summary,
     }
 

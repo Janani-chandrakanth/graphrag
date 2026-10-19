@@ -8,6 +8,7 @@ classifications, establishing ordered steps, entry points, branches, and support
 import json
 import hashlib
 import logging
+import time
 from collections import defaultdict, deque
 from typing import Dict, List, Any, Optional, Set, Tuple
 
@@ -59,6 +60,8 @@ def extract_features(
     If classification is None, calls classify_graph() first.
     Pass in a cached classification to avoid re-running the classifier.
     """
+    _t0 = time.perf_counter()
+    logger.info("extract_features start | nodes=%d | rels=%d | use_llm=%s", len(nodes), len(relationships), use_llm)
     warnings: List[str] = []
 
     # ── Step 0: Classification ────────────────────────────────────────
@@ -151,6 +154,11 @@ def extract_features(
     for i, c in enumerate(candidates):
         c["feature_id"] = _stable_feature_id(c["name"], i)
 
+    dur = time.perf_counter() - _t0
+    logger.info(
+        "extract_features complete | features=%d | nodes=%d | rels=%d | dur=%.2fs",
+        len(candidates), len(nodes), len(relationships), dur,
+    )
     return {
         "features":          candidates,
         "cache_key":         cache_key,

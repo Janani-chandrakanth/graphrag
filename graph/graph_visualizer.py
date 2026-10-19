@@ -5,12 +5,16 @@ Renders interactive vis-network graph visualizations with hierarchical layouts,
 step-by-step flow navigation, search, and dynamic entity highlight controls.
 """
 
+import logging
 import math
 import json
+import time
 import html as _html
 import streamlit.components.v1 as components
 
 from graph.flow_graph_analysis import analyze_flow, FLOW_RELATIONS
+
+logger = logging.getLogger(__name__)
 
 NODE_COLORS = {
     "Actor":                    "#0D9488",  # Teal
@@ -160,6 +164,7 @@ def _build_vis_payload(nodes, relationships, flow_only=False):
         second, separate view that shows just the procedure.
     Returns (vis_nodes, vis_edges, legend_types) as JSON-serializable lists.
     """
+    _t_payload = time.perf_counter()
     # degree count (ALL relation types) so hub nodes render slightly
     # bigger -- this is a display-density signal, unrelated to flow.
     degree = {}
@@ -304,6 +309,10 @@ def _build_vis_payload(nodes, relationships, flow_only=False):
             
         vis_edges.append(edge_entry)
 
+    logger.debug(
+        "Graph payload built | nodes=%d | edges=%d | flow_only=%s | dur=%.3fs",
+        len(vis_nodes), len(vis_edges), flow_only, time.perf_counter() - _t_payload,
+    )
     return vis_nodes, vis_edges, sorted(seen_types)
 
 
@@ -311,9 +320,15 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
     if not vis_nodes:
         return None
 
+    _t_serial = time.perf_counter()
     nodes_json = json.dumps(vis_nodes)
     edges_json = json.dumps(vis_edges)
     detailed_json = json.dumps(detailed_analysis) if detailed_analysis else "null"
+    payload_bytes = len(nodes_json) + len(edges_json)
+    logger.debug(
+        "Graph JSON serialised | nodes=%d | edges=%d | payload_bytes=%d | dur=%.3fs",
+        len(vis_nodes), len(vis_edges), payload_bytes, time.perf_counter() - _t_serial,
+    )
 
     legend_html = "".join(
         f'<span class="legend-item"><span class="dot" '
@@ -526,6 +541,8 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
     return merged;
   }
 
+  console.time("[GRAPH DIAGNOSTIC] Network init to stabilized");
+  console.log("[GRAPH DIAGNOSTIC] Initializing network KEY | nodes=" + rawNodes_KEY.length + " | edges=" + rawEdges_KEY.length + " | largeGraph=" + LARGE_GRAPH);
   var network_KEY = new vis.Network(container_KEY, data_KEY, mergedOptions(DEFAULT_DIRECTION_KEY));
 
   // ── Disable physics as soon as the network stabilises.
@@ -533,6 +550,9 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
   // switching from Free ↔ LR ↔ UD never leaves physics running forever.
   function attachStabilizationOff_KEY() {
     network_KEY.once("stabilizationIterationsDone", function() {
+      try {
+        console.timeEnd("[GRAPH DIAGNOSTIC] Network init to stabilized");
+      } catch (e) {}
       console.log("[GRAPH DIAGNOSTIC] stabilizationIterationsDone: initial stabilization complete, turning physics off");
       network_KEY.setOptions({ physics: { enabled: false } });
     });
@@ -544,12 +564,15 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
   });
 
   window.setDirection_KEY = function() {
+    var t0 = performance.now();
     var dir = document.getElementById("dir_KEY").value;
+    console.log("[GRAPH DIAGNOSTIC] Changing layout direction to:", dir);
     var opts = mergedOptions(dir);
     network_KEY.setOptions(opts);
     if (!LARGE_GRAPH) {
       attachStabilizationOff_KEY();
     }
+    console.log("[GRAPH DIAGNOSTIC] Layout changed to " + dir + " in " + (performance.now() - t0).toFixed(2) + "ms");
   };
 
   window.fitAll_KEY = function() {
@@ -740,6 +763,7 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
   }
 
   window.resetHighlight_KEY = function() {
+    var t0 = performance.now();
     // Delta reset: only restore nodes/edges that were touched in the last highlight call.
     // This avoids iterating rawEdges_KEY/rawNodes_KEY (potentially thousands of items).
     var edgeResets = [];
@@ -789,6 +813,7 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
     network_KEY.unselectAll();
     currentFlowIndex = -1;
     updateFlowUI_KEY();
+    console.log("[GRAPH DIAGNOSTIC] Reset highlight completed in " + (performance.now() - t0).toFixed(2) + "ms");
   };
 
   // Full graph reset (used when the visual state is uncertain, e.g. after flow navigation).
@@ -808,27 +833,38 @@ def _render_html(vis_nodes, vis_edges, legend_types, height=750, key="graph", de
   }
 
   network_KEY.on("click", function(params) {
-    if (params.nodes.length > 0) {
-      // If we are currently in flow navigation, update the flow step index if the clicked node is in the flow
-      if (currentFlowIndex !== -1) {
-        var flow = detailedAnalysis_KEY.actor_flows[currentFlowIndex];
-        var idx = flow.sequence.indexOf(params.nodes[0]);
-        if (idx !== -1) {
-          currentStepIndex = idx;
-          var stepInfo = document.getElementById("step_info_KEY");
-          if (stepInfo) stepInfo.textContent = "Step " + (currentStepIndex + 1) + " of " + flow.sequence.length;
-          highlightFlowPath_KEY(flow.sequence, currentStepIndex);
-          return;
+    var t0 = performance.now();
+    try {
+      if (params.nodes.length > 0) {
+        var clickedNodeId = params.nodes[0];
+        console.log("[GRAPH DIAGNOSTIC] Node clicked: " + clickedNodeId);
+        // If we are currently in flow navigation, update the flow step index if the clicked node is in the flow
+        if (currentFlowIndex !== -1) {
+          var flow = detailedAnalysis_KEY.actor_flows[currentFlowIndex];
+          var idx = flow.sequence.indexOf(clickedNodeId);
+          if (idx !== -1) {
+            currentStepIndex = idx;
+            var stepInfo = document.getElementById("step_info_KEY");
+            if (stepInfo) stepInfo.textContent = "Step " + (currentStepIndex + 1) + " of " + flow.sequence.length;
+            highlightFlowPath_KEY(flow.sequence, currentStepIndex);
+            console.log("[GRAPH DIAGNOSTIC] Flow step " + (idx + 1) + " clicked in " + (performance.now() - t0).toFixed(2) + "ms");
+            return;
+          }
         }
+        highlightNode_KEY(clickedNodeId);
+        console.log("[GRAPH DIAGNOSTIC] Node highlight complete in " + (performance.now() - t0).toFixed(2) + "ms");
+      } else {
+        console.log("[GRAPH DIAGNOSTIC] Canvas clicked (background reset)");
+        window.resetHighlight_KEY();
+        if (currentFlowIndex !== -1) {
+          currentStepIndex = -1;
+          var stepInfo = document.getElementById("step_info_KEY");
+          if (stepInfo) stepInfo.textContent = "Flow selected: click Next to start";
+        }
+        console.log("[GRAPH DIAGNOSTIC] Background reset complete in " + (performance.now() - t0).toFixed(2) + "ms");
       }
-      highlightNode_KEY(params.nodes[0]);
-    } else {
-      window.resetHighlight_KEY();
-      if (currentFlowIndex !== -1) {
-        currentStepIndex = -1;
-        var stepInfo = document.getElementById("step_info_KEY");
-        if (stepInfo) stepInfo.textContent = "Flow selected: click Next to start";
-      }
+    } catch (err) {
+      console.error("[GRAPH DIAGNOSTIC ERROR] Click handling failed:", err);
     }
   });
 
@@ -1045,10 +1081,18 @@ def render_graph(nodes, relationships, height=750, key="maingraph", flow_only=Fa
         st.warning("No nodes to visualize.")
         return
 
+    logger.info(
+        "render_graph start | nodes=%d | rels=%d | flow_only=%s | key=%s",
+        len(nodes), len(relationships), flow_only, key,
+    )
+    _t_render = time.perf_counter()
+
     from graph.flow_graph_analysis import analyze_flow_detailed
 
     # Perform detailed analysis
+    _t_analysis = time.perf_counter()
     detailed = analyze_flow_detailed(nodes, relationships, entry_ids)
+    logger.debug("Flow analysis dur=%.3fs", time.perf_counter() - _t_analysis)
 
     # Annotate nodes with source requirement, confidence score, and isolation reasons
     annotated_nodes = []
@@ -1074,6 +1118,10 @@ def render_graph(nodes, relationships, height=750, key="maingraph", flow_only=Fa
     html_str = _render_html(vis_nodes, vis_edges, legend_types, height=height, key=key, detailed_analysis=detailed)
     legend_rows = _estimate_legend_rows(legend_types)
     extra_height = _TOOLBAR_H + (legend_rows * _LEGEND_ROW_H) + 40
+    logger.info(
+        "render_graph complete | vis_nodes=%d | vis_edges=%d | payload_ready | dur=%.3fs",
+        len(vis_nodes), len(vis_edges), time.perf_counter() - _t_render,
+    )
     components.html(html_str, height=height + extra_height, scrolling=True)
 
 
