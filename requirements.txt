@@ -39,3 +39,7 @@ pandas
 networkx
 python-louvain
 requests
+
+# ─── API & Web Services ──────────────────────────────────────────────
+fastapi
+uvicorn

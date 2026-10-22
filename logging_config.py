@@ -143,7 +143,11 @@ def setup_logging() -> None:
     for name in _noisy_loggers:
         logging.getLogger(name).setLevel(logging.WARNING)
 
+    # Suppress Neo4j DBMS query planner advisory warnings (e.g. non-existent labels in catalog)
+    logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
+
     _logging_configured = True
+
 
     # First log entry after setup
     logger = logging.getLogger(__name__)

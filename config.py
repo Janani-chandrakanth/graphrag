@@ -110,3 +110,9 @@ VISION_MODEL_URL = os.getenv(
     "VISION_MODEL_URL",
     OLLAMA_URL
 )
+
+# ───────────────────────────────────────────────────────────────
+# Graph Visualization API
+# ───────────────────────────────────────────────────────────────
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8000"))

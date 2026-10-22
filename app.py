@@ -142,6 +142,13 @@ with st.sidebar:
         on_change=lambda: st.cache_data.clear(),
         help="Select a document context to filter features, workflows, and visual graphs."
     )
+    st.markdown("---")
+    st.subheader("Graph Visualization API")
+    st.caption("FastAPI REST endpoints for external frontends & Swagger UI:")
+    st.markdown("• [Swagger UI (`/docs`)](http://localhost:8000/docs)")
+    st.markdown("• [Interactive Visualizer (`/visualize`)](http://localhost:8000/visualize)")
+    st.markdown("• [Raw JSON API (`/api/graph`)](http://localhost:8000/api/graph)")
+
 def render_graph(nodes, relationships, key="maingraph", flow_only=False):
     _viz_render_graph(nodes, relationships, height=750, key=key, flow_only=flow_only)
 def render_cypher_graph(records):
